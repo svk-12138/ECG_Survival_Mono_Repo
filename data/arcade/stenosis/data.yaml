@@ -1,0 +1,18 @@
+# YOLOv8 dataset configuration for the stenosis segmentation project
+# Paths are expressed relative to this YAML's location when used with Ultralytics CLI.
+
+path: /data/arcade/stenosis
+train: train/images
+val: val/images
+test: test/images
+
+# Set to "segment" when训练分割模型，检测任务改为 "detect"。
+task: detect
+
+# Number of classes
+nc: 1
+
+# Class name mapping (zero-indexed)
+
+names:
+  0: stenosis

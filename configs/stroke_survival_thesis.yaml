@@ -1,0 +1,75 @@
+# 卒中生存分析论文框架推荐配置
+# --------------------------------
+# 推荐启动方法：
+#   python3 scripts/run_survival_training.py --config configs/stroke_survival_thesis.yaml
+#
+# 使用说明：
+# 1. 将 xml_dir 或 csv_dir 改成你的 ECG 数据目录。
+# 2. 将 manifest 改成你的 JSON manifest 路径。
+# 3. 只改少数关键参数：task_mode / lead_mode / max_time / prediction_horizon。
+# 4. 1200 条左右的小样本，优先使用 prediction + 5 折交叉验证。
+
+# 必填：标签文件，字段至少包含 patient_id / time / event
+manifest: /path/to/stroke_manifest.json
+
+# 二选一：
+xml_dir: /path/to/xml_dir
+csv_dir: null
+
+# 推荐：prediction 做生存预测；classification 保留为基线对照实验
+task_mode: prediction
+
+# 8lead = I, II, V1-V6
+# 12lead = I, II, III, aVR, aVL, aVF, V1-V6
+lead_mode: 12lead
+
+# 小样本建议减少时间区间数，避免过稀疏
+n_intervals: 20
+
+# 按你的随访窗口设置，单位应与 manifest.time 一致
+max_time: 1825.0
+
+# 若想评估某个固定时间点风险，填具体数值，例如 365/1095/1825
+# 若设为 null，则默认输出整个 max_time 窗口内的累计风险
+prediction_horizon: null
+
+# 论文风格预处理
+waveform_type: Rhythm
+resample_hz: 400.0
+apply_filters: true
+bandpass_low_hz: 0.5
+bandpass_high_hz: 100.0
+notch_hz: 60.0
+notch_q: 30.0
+
+# 训练参数
+target_len: 4096
+batch: 32
+epochs: 80
+lr: 0.0005
+dropout: 0.5
+weight_decay: 0.0001
+num_workers: 0
+
+# 小样本优先使用交叉验证
+cv_folds: 5
+cv_seed: 42
+
+# 自动根据任务选择早停指标
+eval_threshold: 0.5
+early_stop_metric: auto
+early_stop_patience: 15
+early_stop_min_delta: 0.0001
+pos_weight_mult: 2.0
+
+# 输出目录
+log_dir: outputs/stroke_survival_thesis
+
+# 设备
+device: null
+use_data_parallel: false
+device_ids: null
+
+# 如已做过调参，可切换为 true 并填写 best_params 路径
+use_best_params: false
+best_params: outputs/stroke_survival_thesis/best_params.json

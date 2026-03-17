@@ -1,0 +1,31 @@
+# 在SSH终端中直接复制粘贴执行的命令序列
+# ================================================
+
+# 步骤1: 查找实际数据集位置
+echo "查找KEMEROVO数据集..."
+find /home/admin123 -type d -name "KEMEROVO" 2>/dev/null
+
+echo ""
+echo "查找ARCADE数据集..."
+find /home/admin123 -type d -name "ARCADE" 2>/dev/null
+
+echo ""
+echo "查找CADICA数据集..."
+find /home/admin123 -type d -name "CADICA" 2>/dev/null
+
+# 步骤2: 查看当前配置文件
+echo ""
+echo "当前配置文件内容:"
+cat /home/admin123/workspace/home_data/Program/FRcnn/Coronary_Angiography_Detection-main/scripts/dataset_generation/cfg_dsgen_combined.yaml
+
+# ================================================
+# 根据找到的路径，修改配置文件
+# ================================================
+
+# 方法1: 使用sed直接修改（如果数据在/home/admin123/workspace/home_data/data/）
+# sed -i 's|/data/MEDDataset/KEMEROVO/dataset|/home/admin123/workspace/home_data/data/MEDDataset/KEMEROVO/dataset|g' /home/admin123/workspace/home_data/Program/FRcnn/Coronary_Angiography_Detection-main/scripts/dataset_generation/cfg_dsgen_combined.yaml
+# sed -i 's|/data/ARCADE|/home/admin123/workspace/home_data/data/ARCADE|g' /home/admin123/workspace/home_data/Program/FRcnn/Coronary_Angiography_Detection-main/scripts/dataset_generation/cfg_dsgen_combined.yaml
+# sed -i 's|/data/CADICA|/home/admin123/workspace/home_data/data/CADICA|g' /home/admin123/workspace/home_data/Program/FRcnn/Coronary_Angiography_Detection-main/scripts/dataset_generation/cfg_dsgen_combined.yaml
+
+# 方法2: 手动编辑
+# nano /home/admin123/workspace/home_data/Program/FRcnn/Coronary_Angiography_Detection-main/scripts/dataset_generation/cfg_dsgen_combined.yaml

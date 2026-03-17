@@ -1,0 +1,44 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# Notebook / temp
+.ipynb_checkpoints/
+*.tmp
+*.temp
+
+# Local datasets and generated artifacts
+data/raw/
+logs/
+output/
+outputs/
+weights/*
+!weights/README.md
+
+# Training / experiment artifacts
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.npz
+*.npy
+
+# Local root artifacts
+/1.653896_leads.csv
+/1.653896_leads_plot.png

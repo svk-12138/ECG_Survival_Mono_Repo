@@ -1,0 +1,24 @@
+[
+  {
+    "patient_id": "000001",
+    "xml_path": "/home/admin123/use/Program/ECG_Survival_Mono_Repo/data/XML/000001_20220101.xml",
+    "time_to_event": 365.0,
+    "event": 1,
+    "meta": {
+      "age": 67,
+      "sex": "M",
+      "notes": "示例：二级预防随访"
+    }
+  },
+  {
+    "patient_id": "000002",
+    "xml_path": "/home/admin123/use/Program/ECG_Survival_Mono_Repo/data/XML/000002_20220105.xml",
+    "time_to_event": 540.0,
+    "event": 0,
+    "meta": {
+      "age": 60,
+      "sex": "F",
+      "notes": "示例：出院随访未事件"
+    }
+  }
+]

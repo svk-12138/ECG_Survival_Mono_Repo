@@ -1,0 +1,175 @@
+python_bin: python
+log_dir: outputs/logs
+report: outputs/pipeline_report.json
+
+vae:
+  enabled: true
+  description: >
+    训练 median-beat VAE，输出 Lightning 日志与最新 checkpoint。
+    Training the median-beat VAE to learn ECG representations.
+  expected_output: modules/vae_model/logs + weights/vae/*
+  script: modules/vae_model/run.py
+  config: modules/vae_model/configs/median_vae.yaml
+  extra_args: ["--export-latents"]
+
+vae_infer:
+  enabled: true
+  description: >
+    使用训练好的 VAE checkpoint，对生存数据集的 median CSV 做推理并导出潜变量。
+    Infer latents on survival dataset for downstream linear regression.
+  expected_output: modules/vae_model/logs/MedianBeatVAE/version_x/latents_survival
+  script: modules/vae_model/tools/extract_latent_features.py
+  config: modules/vae_model/configs/median_vae.yaml
+  checkpoint: latest
+  data_path: /home/admin123/use/Program/ECG_Survival_Mono_Repo/data/median_sorted/keep
+  file_pattern: "*.csv"
+  output: latest
+  extra_args: ["--id-after-dot", "--id-strip-suffix", "_median"]
+
+pearson:
+  enabled: true
+  description: >
+    使用最新的 VAE checkpoint 计算潜变量皮尔逊矩阵，评估独立性。
+    Compute Pearson matrix of latent vectors to evaluate disentanglement.
+  expected_output: outputs/analysis/vae_latent/latent_pearson.*
+  script: scripts/vae_latent_pearson.py
+  vae_root: modules/vae_model
+  config: modules/vae_model/configs/median_vae.yaml
+  checkpoint: weights/vae/MedianBeatVAE/version_15/last.ckpt
+  split: val
+  output: outputs/analysis/vae_latent
+
+survival_tune:
+  enabled: true
+  description: >
+    使用 Optuna 自动搜索生存模型超参数，输出 best_params.json。
+  expected_output: outputs/survival_logs/best_params.json
+  script: modules/survival_model/scripts/tune_optuna.py
+  xml_dir: /home/admin123/use/Program/ECG_Survival_Mono_Repo/data/XML
+  manifest: /home/admin123/use/Program/ECG_Survival_Mono_Repo/data/manifest.json
+  task_mode: prediction
+  lead_mode: 8lead
+  n_intervals: 40
+  max_time: 3650.0
+  prediction_horizon: 1826.25
+  waveform_type: Rhythm
+  resample_hz: 400.0
+  apply_filters: true
+  bandpass_low_hz: 0.5
+  bandpass_high_hz: 100.0
+  notch_hz: 60.0
+  notch_q: 30.0
+  log_dir: outputs/survival_logs
+  use_data_parallel: true
+  device_ids: [0, 1, 2, 3]
+  trials: 20
+  seed: 42
+  cv_folds: 1
+  cv_seed: 42
+  lr_min: 1e-5
+  lr_max: 1e-3
+  dropout_min: 0.2
+  dropout_max: 0.8
+  weight_decay_min: 1e-6
+  weight_decay_max: 5e-4
+  batch_choices: "64,80,100"
+  eval_threshold_min: 0.2
+  eval_threshold_max: 0.6
+  epochs_min: 40
+  epochs_max: 80
+  extra_args: []
+
+survival:
+  enabled: true
+  description: >
+    读取 manifest + XML，按 task_mode 训练 prediction/classification ECG 模型。
+    prediction=离散时间风险预测；classification=单输出分类。
+  expected_output: outputs/survival_logs + modules/survival_model/training_logs
+  script: scripts/run_survival_training.py
+  xml_dir: /home/admin123/use/Program/ECG_Survival_Mono_Repo/data/XML
+  manifest: /home/admin123/use/Program/ECG_Survival_Mono_Repo/data/manifest.json
+  task_mode: prediction
+  lead_mode: 8lead
+  n_intervals: 40
+  max_time: 3650.0
+  prediction_horizon: 1826.25
+  waveform_type: Rhythm
+  resample_hz: 400.0
+  apply_filters: true
+  bandpass_low_hz: 0.5
+  bandpass_high_hz: 100.0
+  notch_hz: 60.0
+  notch_q: 30.0
+  epochs: 100
+  batch: 100
+  lr: 0.0005
+  dropout: 0.5
+  weight_decay: 0.0
+  eval_threshold: 0.5
+  early_stop_metric: auto
+  log_dir: outputs/survival_logs
+  use_data_parallel: true
+  device_ids: [0, 1, 2, 3]
+  use_best_params: false
+  best_params: outputs/survival_logs/best_params.json
+  cv_folds: 5
+  cv_seed: 42
+  extra_args: []
+
+survival_pred:
+  enabled: true
+  description: >
+    使用训练好的模型生成 risk_score。
+    prediction 模式输出指定 horizon 的累计风险；classification 输出事件概率。
+  expected_output: outputs/survival_logs/risk_scores.csv
+  script: modules/survival_model/torch_survival/infer_survival_risk.py
+  checkpoint: outputs/survival_logs/model_final.pt
+  xml_dir: /home/admin123/use/Program/ECG_Survival_Mono_Repo/data/XML
+  manifest: /home/admin123/use/Program/ECG_Survival_Mono_Repo/data/manifest.json
+  task_mode: auto
+  lead_mode: 8lead
+  n_intervals: 40
+  max_time: 3650.0
+  prediction_horizon: 1826.25
+  target_len: 4096
+  waveform_type: Rhythm
+  resample_hz: 400.0
+  apply_filters: true
+  bandpass_low_hz: 0.5
+  bandpass_high_hz: 100.0
+  notch_hz: 60.0
+  notch_q: 30.0
+  batch: 16
+  output: outputs/survival_logs/risk_scores.csv
+  device: null
+
+linear:
+  enabled: true
+  description: >
+    使用 VAE 潜变量 + 生存模型 risk_score 训练线性回归，并按 t 值筛选潜在因子。
+  expected_output: modules/vae_model/logs/MedianBeatVAE/version_9/latents_survival/linear_scores
+  script: modules/vae_model/scripts/train_linear_scores.py
+  latents_dir: latest
+  labels_csv: outputs/survival_logs/risk_scores.csv  # 请确保 sample_id 命名与 latents 一致，必要时配合 id_suffix
+  id_column: sample_id
+  id_suffix: ""   # 如潜变量 id 有后缀（例 _median12L），在此填入
+  label_column: risk_score
+  target_type: regression
+  top_k: 5
+  output: latest
+
+latent_traversal_mean:
+  enabled: true
+  description: >
+    对最新的潜变量集合做聚合遍历可视化，输出多导联图。
+  expected_output: logs/MedianBeatVAE/version_x/latents_survival/latent*_multilead_mean.png
+  script: modules/vae_model/tools/latent_traversal_mean.py
+  config: modules/vae_model/configs/median_vae.yaml
+  checkpoint: latest
+  latents_dir: latest
+  output_dir: latest
+  dims: [11, 14, 20]
+  steps: [-5, 5, 11]
+  xmax: 400
+  downsample: 800
+  batch_size: 64

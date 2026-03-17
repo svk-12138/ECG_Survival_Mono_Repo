@@ -1,0 +1,2 @@
+latent_dim=24
+mean_abs_corr_offdiag=0.413256
