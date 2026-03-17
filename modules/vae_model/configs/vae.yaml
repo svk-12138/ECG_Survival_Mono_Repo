@@ -1,0 +1,48 @@
+model_params:
+  name: "VanillaVAE"
+  in_channels: 1
+  latent_dim: 30
+  beta: 0.25
+
+data_params:
+data_path: "/home/admin123/use/Program/ECG_Survival_Mono_Repo/data/median_csv"
+dataset_type: "median_csv"
+  file_pattern: "*.csv"
+  lead_order:
+    - I
+    - II
+    - III
+    - V1
+    - V2
+    - V3
+    - V4
+    - V5
+    - V6
+  max_length: 4096
+  pad_value: 0.0
+  normalize: "zscore"
+  representation: "image"
+  target_hw:
+    - 8
+    - 4096
+  train_batch_size: 32
+  val_batch_size: 32
+  num_workers: 0
+  val_fraction: 0.1
+
+exp_params:
+  LR: 0.001
+  weight_decay: 0.0
+  scheduler_gamma: 0.95
+  kld_weight: 0.00025
+  manual_seed: 1265
+
+trainer_params:
+  accelerator: "auto"
+  devices: 1
+  max_epochs: 50
+
+logging_params:
+  save_dir: "logs/"
+  name: "MedianECG-VAE"
+  

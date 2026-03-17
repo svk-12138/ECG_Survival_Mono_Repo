@@ -30,6 +30,10 @@ output/
 outputs/
 weights/*
 !weights/README.md
+modules/vae_model/plots/
+modules/vae_model/results/
+modules/survival_model/training_logs/
+modules/survival_model/training_logs.zip
 
 # Training / experiment artifacts
 *.pt

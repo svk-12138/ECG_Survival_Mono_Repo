@@ -1,0 +1,55 @@
+model_params:
+  name: "MedianBeatVAE"
+  in_channels: 12
+  out_channels: 12
+  seq_len: 4096
+  latent_dim: 24
+  beta: 0.25
+  hidden_dims: [32, 64, 128, 256]
+  kernel_sizes: [9, 7, 5, 3]
+
+data_params:
+  data_path: "/home/admin123/use/Program/ECG_Survival_Mono_Repo/data/median_sorted/keep"
+  dataset_type: "median_csv"
+  file_pattern: "*.csv"
+  lead_order:
+    - I
+    - II
+    - III
+    - aVR
+    - aVL
+    - aVF
+    - V1
+    - V2
+    - V3
+    - V4
+    - V5
+    - V6
+  train_batch_size: 32
+  val_batch_size: 32
+  max_length: 4096
+  pad_value: 0.0
+  normalize: "zscore"
+  val_fraction: 0.1
+  test_fraction: 0.1
+  num_workers: 0
+  representation: "waveform"
+  shuffle: true
+  split_seed: 1265
+
+exp_params:
+  LR: 0.0005
+  weight_decay: 0.0
+  scheduler_gamma: 0.95
+  kld_weight: 0.00025
+  manual_seed: 1265
+  reconstruction_loss: "sMAPE"
+
+trainer_params:
+  accelerator: "cpu"
+  devices: 1
+  max_epochs: 50
+
+logging_params:
+  save_dir: "logs/"
+  name: "MedianVAE"
