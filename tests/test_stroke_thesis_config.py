@@ -18,6 +18,15 @@ class StrokeThesisConfigTest(unittest.TestCase):
         self.assertIn("manifest", self.cfg)
         self.assertTrue("xml_dir" in self.cfg or "csv_dir" in self.cfg)
 
+    def test_split_ratios(self) -> None:
+        train_ratio = float(self.cfg.get("train_ratio", 0.0))
+        val_ratio = float(self.cfg.get("val_ratio", 0.0))
+        test_ratio = float(self.cfg.get("test_ratio", 0.0))
+        self.assertGreater(train_ratio, 0.0)
+        self.assertGreater(val_ratio, 0.0)
+        self.assertGreaterEqual(test_ratio, 0.0)
+        self.assertAlmostEqual(train_ratio + val_ratio + test_ratio, 1.0, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

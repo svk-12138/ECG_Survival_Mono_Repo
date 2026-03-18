@@ -84,6 +84,9 @@ DEFAULT_USE_DATA_PARALLEL = False  # 是否启用 DataParallel 多 GPU
 DEFAULT_DEVICE_IDS = None  # 例如 [0,1,2,3]，为空时使用所有可见 GPU
 DEFAULT_CV_FOLDS = 1  # K-fold cross validation (1 = disable)
 DEFAULT_CV_SEED = 42  # Random seed for CV splits
+DEFAULT_TRAIN_RATIO = 0.8  # 留出法训练集比例
+DEFAULT_VAL_RATIO = 0.2  # 留出法验证集比例
+DEFAULT_TEST_RATIO = 0.0  # 留出法测试集比例，允许为 0
 DEFAULT_CSV_DIR = None
 DEFAULT_TASK_MODE = "prediction"
 DEFAULT_LEAD_MODE = "8lead"
@@ -137,6 +140,9 @@ class TrainConfig:
     device_ids: list[int] | None = DEFAULT_DEVICE_IDS
     cv_folds: int = DEFAULT_CV_FOLDS
     cv_seed: int = DEFAULT_CV_SEED
+    train_ratio: float = DEFAULT_TRAIN_RATIO
+    val_ratio: float = DEFAULT_VAL_RATIO
+    test_ratio: float = DEFAULT_TEST_RATIO
 
 def _apply_best_params(cfg: TrainConfig) -> None:
     if not BEST_PARAMS_PATH.exists():
@@ -522,19 +528,106 @@ def evaluate(
     }
 
 
-def _split_dataset(dataset, seed: int = 42):
-    """按 7:1.5:1.5 的比例切分训练/验证/测试集，并处理边界情况。"""
+def _validate_split_ratios(train_ratio: float, val_ratio: float, test_ratio: float) -> tuple[float, float, float]:
+    """校验留出法比例配置。"""
 
+    ratios = {
+        "train": float(train_ratio),
+        "val": float(val_ratio),
+        "test": float(test_ratio),
+    }
+    for name, value in ratios.items():
+        if value < 0:
+            raise ValueError(f"{name}_ratio 不能小于 0，收到: {value}")
+    if ratios["train"] <= 0:
+        raise ValueError("train_ratio 必须大于 0")
+    if ratios["val"] <= 0:
+        raise ValueError("val_ratio 必须大于 0")
+    total = sum(ratios.values())
+    if not np.isclose(total, 1.0, atol=1e-6):
+        raise ValueError(
+            f"train_ratio + val_ratio + test_ratio 必须等于 1.0，当前为 {total:.6f}"
+        )
+    return ratios["train"], ratios["val"], ratios["test"]
+
+
+
+def _compute_split_lengths(
+    n: int,
+    train_ratio: float,
+    val_ratio: float,
+    test_ratio: float,
+) -> tuple[int, int, int]:
+    """根据比例计算 train/val/test 长度，允许 test 为 0。"""
+
+    if n < 2:
+        raise ValueError("数据量至少需要 2 条，才能同时划分训练集和验证集")
+
+    names = ("train", "val", "test")
+    ratios = {
+        "train": train_ratio,
+        "val": val_ratio,
+        "test": test_ratio,
+    }
+    mins = {
+        "train": 1 if train_ratio > 0 else 0,
+        "val": 1 if val_ratio > 0 else 0,
+        "test": 1 if test_ratio > 0 else 0,
+    }
+    required = sum(mins.values())
+    if required > n:
+        raise ValueError(
+            f"当前样本数 {n} 无法满足 train/val/test 的非空划分要求；"
+            "请减小 test_ratio 或增加数据量。"
+        )
+
+    raw = {name: ratios[name] * n for name in names}
+    lengths = {name: int(np.floor(raw[name])) for name in names}
+    for name in names:
+        lengths[name] = max(lengths[name], mins[name])
+
+    total = sum(lengths.values())
+    while total > n:
+        candidates = [name for name in ("train", "test", "val") if lengths[name] > mins[name]]
+        if not candidates:
+            raise ValueError("划分失败，请检查 train/val/test 比例设置。")
+        remove_name = max(candidates, key=lambda name: (lengths[name] - raw[name], lengths[name]))
+        lengths[remove_name] -= 1
+        total -= 1
+
+    while total < n:
+        add_name = max(
+            names,
+            key=lambda name: (raw[name] - lengths[name], raw[name], -names.index(name)),
+        )
+        lengths[add_name] += 1
+        total += 1
+
+    return lengths["train"], lengths["val"], lengths["test"]
+
+
+
+def _split_dataset(
+    dataset,
+    train_ratio: float,
+    val_ratio: float,
+    test_ratio: float,
+    seed: int = 42,
+):
+    """按显式比例切分训练/验证/测试集。"""
+
+    train_ratio, val_ratio, test_ratio = _validate_split_ratios(
+        train_ratio,
+        val_ratio,
+        test_ratio,
+    )
     n = len(dataset)
-    train_len = int(n * 0.7)
-    val_len = int(n * 0.15)
-    test_len = n - train_len - val_len
-    if val_len == 0 and n >= 2:
-        val_len = 1
-        train_len = max(train_len - 1, 1)
-    if test_len == 0 and n >= 3:
-        test_len = 1
-        train_len = max(train_len - 1, 1)
+    train_len, val_len, test_len = _compute_split_lengths(
+        n,
+        train_ratio,
+        val_ratio,
+        test_ratio,
+    )
     generator = torch.Generator().manual_seed(seed)
     return random_split(dataset, [train_len, val_len, test_len], generator=generator)
 
@@ -1100,9 +1193,16 @@ def run_training(cfg: TrainConfig) -> dict:
         dataset = ECGXMLSurvDataset(cfg.manifest, cfg.xml_dir, breaks, preprocessing, cfg.task_mode)
 
     if cfg.cv_folds and cfg.cv_folds > 1:
+        print("[split] 已启用交叉验证，train_ratio/val_ratio/test_ratio 将被忽略。")
         return _run_cross_validation(cfg, dataset, device, device_ids)
 
-    train_set, val_set, test_set = _split_dataset(dataset)  # 调用 _split_dataset 进行 7:1.5:1.5 划分
+    train_set, val_set, test_set = _split_dataset(
+        dataset,
+        train_ratio=cfg.train_ratio,
+        val_ratio=cfg.val_ratio,
+        test_ratio=cfg.test_ratio,
+        seed=cfg.cv_seed,
+    )
 
     # 第二步：构建数据加载器，包含训练、评估、验证、测试
     train_loader = DataLoader(train_set, batch_size=cfg.batch, shuffle=True, num_workers=cfg.num_workers)
@@ -1117,6 +1217,7 @@ def run_training(cfg: TrainConfig) -> dict:
     print(
         f"Dataset: {num_samples} samples | events: {num_events} ({event_ratio:.2%})"
         f" | leads:{len(leads)} ({cfg.lead_mode})"
+        f" | split_ratio -> train:{cfg.train_ratio:.2f} val:{cfg.val_ratio:.2f} test:{cfg.test_ratio:.2f}"
         f" | splits -> train:{len(train_set)} val:{len(val_set)} test:{len(test_set)}"
     )
 
@@ -1143,22 +1244,26 @@ def run_training(cfg: TrainConfig) -> dict:
     val_metrics = result["val"]
 
     criterion = SurvLikelihoodLoss(cfg.n_intervals) if cfg.task_mode == "prediction" else nn.BCEWithLogitsLoss()
-    test_metrics = evaluate(
-        model,
-        test_loader,
-        criterion,
-        device,
-        task_mode=cfg.task_mode,
-        breaks=breaks,
-        prediction_horizon=cfg.prediction_horizon,
-        threshold=cfg.eval_threshold,
-    )
-    print(
-        f"[Test] loss={test_metrics['loss']:.4f} auc={test_metrics['auc']:.4f} "
-        f"pr_auc={test_metrics['pr_auc']:.4f} c_index={test_metrics['c_index']:.4f} "
-        f"f1={test_metrics['f1']:.4f} "
-        f"brier={test_metrics['brier']:.4f}"
-    )
+    if len(test_set) == 0:
+        test_metrics = None
+        print("[Test] 已跳过：test_ratio=0，当前未划分测试集。")
+    else:
+        test_metrics = evaluate(
+            model,
+            test_loader,
+            criterion,
+            device,
+            task_mode=cfg.task_mode,
+            breaks=breaks,
+            prediction_horizon=cfg.prediction_horizon,
+            threshold=cfg.eval_threshold,
+        )
+        print(
+            f"[Test] loss={test_metrics['loss']:.4f} auc={test_metrics['auc']:.4f} "
+            f"pr_auc={test_metrics['pr_auc']:.4f} c_index={test_metrics['c_index']:.4f} "
+            f"f1={test_metrics['f1']:.4f} "
+            f"brier={test_metrics['brier']:.4f}"
+        )
     return {"train": train_metrics, "val": val_metrics, "test": test_metrics}
 
 

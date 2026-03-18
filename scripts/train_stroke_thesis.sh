@@ -85,8 +85,17 @@ DROPOUT=0.5
 WEIGHT_DECAY=0.0001
 NUM_WORKERS=0
 
-# 小样本建议使用 5 折交叉验证
-CV_FOLDS=5
+# 留出法划分：
+# - 仅在 CV_FOLDS=1 时生效
+# - 默认固定为 0.8 / 0.2 / 0.0，即训练/验证，无测试集
+TRAIN_RATIO=0.8
+VAL_RATIO=0.2
+TEST_RATIO=0.0
+
+# 是否启用交叉验证：
+# - 1 表示使用上面的 train/val/test 比例
+# - >1 表示启用 K 折交叉验证，此时比例参数会被忽略
+CV_FOLDS=1
 CV_SEED=42
 
 # 早停与评估
@@ -181,6 +190,9 @@ CMD=(
   "--num-workers" "$NUM_WORKERS"
   "--cv-folds" "$CV_FOLDS"
   "--cv-seed" "$CV_SEED"
+  "--train-ratio" "$TRAIN_RATIO"
+  "--val-ratio" "$VAL_RATIO"
+  "--test-ratio" "$TEST_RATIO"
   "--eval-threshold" "$EVAL_THRESHOLD"
   "--early-stop-metric" "$EARLY_STOP_METRIC"
   "--early-stop-patience" "$EARLY_STOP_PATIENCE"
@@ -231,6 +243,8 @@ echo "  xml_dir=$XML_DIR_PATH"
 echo "  csv_dir=$CSV_DIR_PATH"
 echo "  log_dir=$LOG_DIR_PATH"
 echo "  prediction_horizon=$PREDICTION_HORIZON"
+echo "  split_ratio=train:$TRAIN_RATIO val:$VAL_RATIO test:$TEST_RATIO"
+echo "  cv_folds=$CV_FOLDS"
 
 echo "[cmd] ${CMD[*]}"
 exec "${CMD[@]}"

@@ -24,6 +24,7 @@ scripts\train_stroke_thesis.bat
 2. 修改脚本顶部参数后运行 `scripts\train_stroke_thesis.bat`
 
 路径既支持绝对路径，也支持相对仓库根目录的路径；如果路径里有空格或中文，保留双引号即可。
+默认留出法比例已经改成 train=0.8、val=0.2、test=0.0；如果把 `cv_folds` 改成大于 1，就会切换回交叉验证，此时比例参数会被忽略。
 
 如果你是 Linux / macOS / WSL 用户，再使用：
 

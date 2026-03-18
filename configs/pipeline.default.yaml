@@ -114,6 +114,9 @@ survival:
   best_params: outputs/survival_logs/best_params.json
   cv_folds: 5
   cv_seed: 42
+  train_ratio: 0.8
+  val_ratio: 0.2
+  test_ratio: 0.0
   extra_args: []
 
 survival_pred:

@@ -25,6 +25,16 @@ class PipelineConfigTest(unittest.TestCase):
         self.assertIn(self.cfg["survival"].get("lead_mode"), {"8lead", "12lead"})
         self.assertIn(self.cfg["survival_pred"].get("lead_mode"), {"8lead", "12lead"})
 
+    def test_survival_split_ratios(self) -> None:
+        survival = self.cfg["survival"]
+        train_ratio = float(survival.get("train_ratio", 0.0))
+        val_ratio = float(survival.get("val_ratio", 0.0))
+        test_ratio = float(survival.get("test_ratio", 0.0))
+        self.assertGreater(train_ratio, 0.0)
+        self.assertGreater(val_ratio, 0.0)
+        self.assertGreaterEqual(test_ratio, 0.0)
+        self.assertAlmostEqual(train_ratio + val_ratio + test_ratio, 1.0, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

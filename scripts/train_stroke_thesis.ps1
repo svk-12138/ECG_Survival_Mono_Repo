@@ -128,8 +128,17 @@ $Dropout = 0.5
 $WeightDecay = 0.0001
 $NumWorkers = 0
 
-# 小样本建议使用 5 折交叉验证
-$CVFolds = 5
+# 留出法划分：
+# - 仅在 CVFolds=1 时生效
+# - 默认固定为 0.8 / 0.2 / 0.0，即训练/验证，无测试集
+$TrainRatio = 0.8
+$ValRatio = 0.2
+$TestRatio = 0.0
+
+# 是否启用交叉验证：
+# - 1 表示使用上面的 train/val/test 比例
+# - 大于 1 表示启用 K 折交叉验证，此时比例参数会被忽略
+$CVFolds = 1
 $CVSeed = 42
 
 # 早停与评估
@@ -215,6 +224,9 @@ $CommandArgs += @('--weight-decay', $WeightDecay.ToString())
 $CommandArgs += @('--num-workers', $NumWorkers.ToString())
 $CommandArgs += @('--cv-folds', $CVFolds.ToString())
 $CommandArgs += @('--cv-seed', $CVSeed.ToString())
+$CommandArgs += @('--train-ratio', $TrainRatio.ToString())
+$CommandArgs += @('--val-ratio', $ValRatio.ToString())
+$CommandArgs += @('--test-ratio', $TestRatio.ToString())
 $CommandArgs += @('--eval-threshold', $EvalThreshold.ToString())
 $CommandArgs += @('--early-stop-metric', $EarlyStopMetric)
 $CommandArgs += @('--early-stop-patience', $EarlyStopPatience.ToString())
@@ -265,6 +277,8 @@ Write-Host "  xml_dir=$XmlDirResolved"
 Write-Host "  csv_dir=$CsvDirResolved"
 Write-Host "  log_dir=$LogDirResolved"
 Write-Host "  prediction_horizon=$PredictionHorizon"
+Write-Host "  split_ratio=train:$TrainRatio val:$ValRatio test:$TestRatio"
+Write-Host "  cv_folds=$CVFolds"
 Write-Host "[cmd] $PythonBin $($PythonPrefixArgs -join ' ') $($CommandArgs -join ' ')"
 
 $ErrorActionPreference = "Continue"

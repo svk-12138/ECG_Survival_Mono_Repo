@@ -21,6 +21,13 @@
 - `$TaskMode`
 - `$LeadMode`
 
+建议一起确认：
+
+- `$TrainRatio`
+- `$ValRatio`
+- `$TestRatio`
+- `$CVFolds`
+
 路径说明：
 
 - 可以写绝对路径，例如 `D:\stroke_project\stroke_manifest.json`
@@ -43,6 +50,23 @@ $LeadMode = "12lead"
 $XmlDir = ""
 $CsvDir = "D:\stroke_project\csv_dir"
 ```
+
+默认划分方式：
+
+```powershell
+$TrainRatio = 0.8
+$ValRatio = 0.2
+$TestRatio = 0.0
+$CVFolds = 1
+```
+
+含义是：
+
+- 固定留出法
+- 80% 训练集
+- 20% 验证集
+- 测试集允许为空
+- 如果把 `$CVFolds` 改成大于 1，就会切换成交叉验证，此时上面的比例参数会被忽略
 
 ## 第 3 步：启动训练
 
@@ -111,7 +135,10 @@ $LeadMode = "8lead"
 $TaskMode = "prediction"
 $LeadMode = "12lead"
 $NIntervals = 20
-$CVFolds = 5
+$TrainRatio = 0.8
+$ValRatio = 0.2
+$TestRatio = 0.0
+$CVFolds = 1
 $PredictionHorizon = "null"
 $ApplyFilters = $true
 ```
@@ -120,7 +147,8 @@ $ApplyFilters = $true
 
 - 用生存预测作为主任务
 - 先跑 12 导模型
-- 用 5 折交叉验证应对小样本
+- 默认按 0.8 / 0.2 做训练集和验证集划分
+- 测试集先留空，避免小样本下过度切薄
 - 打开 ECG 滤波，补上杂波处理
 
 ## Linux / macOS / WSL 用户怎么用

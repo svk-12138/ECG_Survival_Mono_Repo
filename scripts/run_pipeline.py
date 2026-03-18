@@ -290,6 +290,9 @@ def run_survival(cfg: dict, python_bin: str, log_file: Path, summary: list) -> N
         "--device-ids": "device_ids",
         "--cv-folds": "cv_folds",
         "--cv-seed": "cv_seed",
+        "--train-ratio": "train_ratio",
+        "--val-ratio": "val_ratio",
+        "--test-ratio": "test_ratio",
         "--best-params": "best_params",
     }
     for flag, key in option_map.items():
