@@ -3,6 +3,7 @@
 
 功能：
 1. 读取 `patient_id + time + event` 的 JSON manifest。
+   若 manifest 额外包含 `xml_file`/`csv_file`，则按该条目精确绑定每次 ECG 检查。
 2. 从 XML 或 CSV 读取 ECG，并走统一预处理。
 3. 通过 `task_mode` 控制：
    - `prediction`: 离散时间生存预测
@@ -36,8 +37,8 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
-from sklearn.model_selection import KFold, StratifiedKFold
-from torch.utils.data import Dataset, DataLoader, Subset, random_split
+from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
+from torch.utils.data import Dataset, DataLoader, Subset
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm.auto import tqdm
 
@@ -224,6 +225,21 @@ def _build_csv_index(csv_dir: Path) -> Dict[str, Path]:
     return index
 
 
+def _resolve_manifest_waveform_path(base_dir: Path, row: dict, field_name: str) -> Path | None:
+    raw_value = row.get(field_name)
+    if raw_value is None:
+        return None
+    text = str(raw_value).strip()
+    if not text:
+        return None
+    candidate = Path(text)
+    path = candidate if candidate.is_absolute() else (base_dir / candidate)
+    path = path.resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"{field_name} 指向的文件不存在: {path}")
+    return path
+
+
 def _compute_pos_weight(events: np.ndarray, indices: list[int] | np.ndarray | None = None) -> float:
     if indices is not None:
         subset = events[indices]
@@ -300,13 +316,48 @@ class _BaseECGDataset(Dataset):
         self.task_mode = task_mode
         self.rows = _load_manifest(manifest_json)
         required = {"patient_id", "time", "event"}
+        patient_ids: list[str] = []
+        group_ids: list[str] = []
+        used_patient_sn = False
+        missing_patient_sn = False
         for row in self.rows:
             if not required.issubset(row.keys()):
                 raise KeyError(f"JSON 条目缺少字段: {required}")
+            patient_id = str(row["patient_id"]).strip()
+            if not patient_id:
+                raise ValueError("JSON 条目中的 patient_id 不能为空")
+            row["patient_id"] = patient_id
+            patient_sn = str(row.get("patient_SN", "")).strip() if "patient_SN" in row else ""
+            if patient_sn:
+                row["patient_SN"] = patient_sn
+                group_ids.append(patient_sn)
+                used_patient_sn = True
+            else:
+                group_ids.append(patient_id)
+                missing_patient_sn = True
+            patient_ids.append(patient_id)
         times = np.array([float(r["time"]) for r in self.rows], dtype=np.float32)
         events = np.array([int(r["event"]) for r in self.rows], dtype=np.int64)
         self.events = events.astype(np.int64)
         self.times = times
+        self.patient_ids = np.array(patient_ids, dtype=object)
+        self.group_ids = np.array(group_ids, dtype=object)
+        if used_patient_sn and not missing_patient_sn:
+            self.group_field = "patient_SN"
+        elif used_patient_sn:
+            self.group_field = "patient_SN_or_patient_id"
+        else:
+            self.group_field = "patient_id"
+        self.group_to_indices: Dict[str, list[int]] = {}
+        for idx, group_id in enumerate(group_ids):
+            self.group_to_indices.setdefault(group_id, []).append(idx)
+        self.unique_group_ids = np.array(list(self.group_to_indices.keys()), dtype=object)
+        # Backward compatibility for older helper code/tests.
+        self.unique_patient_ids = self.unique_group_ids
+        self.group_events = np.array(
+            [int(self.events[self.group_to_indices[group_id]].max()) for group_id in self.unique_group_ids],
+            dtype=np.int64,
+        )
         if task_mode == "prediction":
             self.targets = make_surv_targets(times, events, breaks).astype(np.float32)
         else:
@@ -318,6 +369,15 @@ class _BaseECGDataset(Dataset):
     def _target_tensor(self, idx: int) -> torch.Tensor:
         target = self.targets[idx]
         return torch.from_numpy(target).float() if isinstance(target, np.ndarray) else torch.tensor(float(target), dtype=torch.float32)
+
+    def subset_indices_for_groups(self, group_ids: np.ndarray | list[str]) -> np.ndarray:
+        indices: list[int] = []
+        for group_id in group_ids:
+            indices.extend(self.group_to_indices[str(group_id)])
+        return np.array(sorted(indices), dtype=np.int64)
+
+    def subset_indices_for_patients(self, patient_ids: np.ndarray | list[str]) -> np.ndarray:
+        return self.subset_indices_for_groups(patient_ids)
 
 
 class ECGXMLSurvDataset(_BaseECGDataset):
@@ -338,9 +398,11 @@ class ECGXMLSurvDataset(_BaseECGDataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         row = self.rows[idx]
         pid = str(row["patient_id"])
-        if pid not in self.patient_index:
-            raise FileNotFoundError(f"PatientID {pid} 在 XML 目录中未找到")
-        xml_path = self.patient_index[pid]
+        xml_path = _resolve_manifest_waveform_path(self.xml_dir, row, "xml_file")
+        if xml_path is None:
+            if pid not in self.patient_index:
+                raise FileNotFoundError(f"PatientID {pid} 在 XML 目录中未找到")
+            xml_path = self.patient_index[pid]
         x = load_xml_ecg(xml_path, self.preprocessing)
         event = self.events[idx]
         time_value = self.times[idx]
@@ -373,9 +435,11 @@ class ECGCSVSurvDataset(_BaseECGDataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         row = self.rows[idx]
         pid = str(row["patient_id"])
-        if pid not in self.csv_index:
-            raise FileNotFoundError(f"PatientID {pid} 在 CSV 目录中未找到")
-        csv_path = self.csv_index[pid]
+        csv_path = _resolve_manifest_waveform_path(self.csv_dir, row, "csv_file")
+        if csv_path is None:
+            if pid not in self.csv_index:
+                raise FileNotFoundError(f"PatientID {pid} 在 CSV 目录中未找到")
+            csv_path = self.csv_index[pid]
         x = load_csv_ecg(csv_path, self.preprocessing)
         event = self.events[idx]
         time_value = self.times[idx]
@@ -614,22 +678,71 @@ def _split_dataset(
     test_ratio: float,
     seed: int = 42,
 ):
-    """按显式比例切分训练/验证/测试集。"""
+    """按患者分组切分训练/验证/测试集，避免同一患者泄露到多个子集。"""
 
     train_ratio, val_ratio, test_ratio = _validate_split_ratios(
         train_ratio,
         val_ratio,
         test_ratio,
     )
-    n = len(dataset)
-    train_len, val_len, test_len = _compute_split_lengths(
-        n,
+    groups = _dataset_groups(dataset)
+    group_events = dataset.group_events
+    n_groups = len(groups)
+    train_group_len, val_group_len, test_group_len = _compute_split_lengths(
+        n_groups,
         train_ratio,
         val_ratio,
         test_ratio,
     )
-    generator = torch.Generator().manual_seed(seed)
-    return random_split(dataset, [train_len, val_len, test_len], generator=generator)
+
+    group_indices = np.arange(n_groups)
+
+    def _split_group_indices(source_indices: np.ndarray, train_size: int, test_size: int, split_seed: int):
+        if train_size == 0:
+            return np.array([], dtype=np.int64), source_indices.copy()
+        if test_size == 0:
+            return source_indices.copy(), np.array([], dtype=np.int64)
+        source_labels = group_events[source_indices]
+        unique, counts = np.unique(source_labels, return_counts=True)
+        use_stratify = (
+            len(unique) > 1
+            and counts.min() >= 2
+            and train_size >= len(unique)
+            and test_size >= len(unique)
+        )
+        stratify = source_labels if use_stratify else None
+        train_idx, test_idx = train_test_split(
+            source_indices,
+            train_size=train_size,
+            test_size=test_size,
+            random_state=split_seed,
+            shuffle=True,
+            stratify=stratify,
+        )
+        return np.array(train_idx, dtype=np.int64), np.array(test_idx, dtype=np.int64)
+
+    train_group_idx, remaining_group_idx = _split_group_indices(
+        group_indices,
+        train_group_len,
+        val_group_len + test_group_len,
+        seed,
+    )
+
+    if test_group_len > 0:
+        val_group_idx, test_group_idx = _split_group_indices(
+            remaining_group_idx,
+            val_group_len,
+            test_group_len,
+            seed + 1,
+        )
+    else:
+        val_group_idx = remaining_group_idx
+        test_group_idx = np.array([], dtype=np.int64)
+
+    train_idx = _subset_indices_for_groups(dataset, groups[train_group_idx])
+    val_idx = _subset_indices_for_groups(dataset, groups[val_group_idx])
+    test_idx = _subset_indices_for_groups(dataset, groups[test_group_idx])
+    return Subset(dataset, train_idx), Subset(dataset, val_idx), Subset(dataset, test_idx)
 
 
 def _normalize_device_ids(value) -> list[int] | None:
@@ -687,19 +800,63 @@ def _concordance_index(time: np.ndarray, event: np.ndarray, score: np.ndarray) -
     return num / den if den > 0 else float("nan")
 
 
-def _make_cv_splits(events: np.ndarray, n_splits: int, seed: int):
-    """生成 K-fold indices（优先分层，否则回退到普通 KFold）。"""
+def _dataset_group_field(dataset) -> str:
+    return str(getattr(dataset, "group_field", "patient_id"))
 
-    indices = np.arange(len(events))
-    unique, counts = np.unique(events, return_counts=True)
+
+def _dataset_groups(dataset) -> np.ndarray:
+    groups = getattr(dataset, "unique_group_ids", None)
+    if groups is not None:
+        return groups
+    return getattr(dataset, "unique_patient_ids")
+
+
+def _subset_indices_for_groups(dataset, groups: np.ndarray | list[str]) -> np.ndarray:
+    if hasattr(dataset, "subset_indices_for_groups"):
+        return dataset.subset_indices_for_groups(groups)
+    return dataset.subset_indices_for_patients(groups)
+
+
+def _make_cv_splits(dataset: _BaseECGDataset, n_splits: int, seed: int):
+    """按患者分组生成 K-fold indices，避免同一患者泄露到多个折。"""
+
+    groups = _dataset_groups(dataset)
+    group_events = dataset.group_events
+    n_groups = len(groups)
+    if n_groups < n_splits:
+        group_field = _dataset_group_field(dataset)
+        raise ValueError(
+            f"唯一 {group_field} 分组数量不足以做 {n_splits} 折交叉验证："
+            f"当前分组数={n_groups}"
+        )
+
+    group_indices = np.arange(n_groups)
+    unique, counts = np.unique(group_events, return_counts=True)
     use_stratified = len(unique) > 1 and counts.min() >= n_splits
     if use_stratified:
         splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
-        splits = list(splitter.split(indices, events))
+        group_splits = list(splitter.split(group_indices, group_events))
     else:
         splitter = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
-        splits = list(splitter.split(indices))
-    return splits, use_stratified
+        group_splits = list(splitter.split(group_indices))
+
+    sample_splits = []
+    for train_group_idx, val_group_idx in group_splits:
+        train_idx = _subset_indices_for_groups(dataset, groups[train_group_idx])
+        val_idx = _subset_indices_for_groups(dataset, groups[val_group_idx])
+        sample_splits.append((train_idx, val_idx))
+    return sample_splits, use_stratified
+
+
+def _group_count(dataset: _BaseECGDataset, indices: np.ndarray) -> int:
+    if len(indices) == 0:
+        return 0
+    values = getattr(dataset, "group_ids", getattr(dataset, "patient_ids"))
+    return int(len(set(str(values[int(idx)]) for idx in indices)))
+
+
+def _patient_count(dataset: _BaseECGDataset, indices: np.ndarray) -> int:
+    return _group_count(dataset, indices)
 
 
 def _train_model(
@@ -1022,9 +1179,10 @@ def _run_cross_validation(
 ) -> dict:
     """执行 K-fold 交叉验证训练与汇总。"""
 
-    splits, stratified = _make_cv_splits(dataset.events, cfg.cv_folds, cfg.cv_seed)
+    splits, stratified = _make_cv_splits(dataset, cfg.cv_folds, cfg.cv_seed)
+    group_field = _dataset_group_field(dataset)
     cfg.log_dir.mkdir(parents=True, exist_ok=True)
-    print(f"[CV] {cfg.cv_folds}-fold | stratified={stratified} | seed={cfg.cv_seed}")
+    print(f"[CV] {cfg.cv_folds}-fold | stratified={stratified} | seed={cfg.cv_seed} | group_field={group_field}")
 
     fold_results: List[dict] = []
     for fold_id, (train_idx, val_idx) in enumerate(splits, 1):
@@ -1052,9 +1210,13 @@ def _run_cross_validation(
 
         train_count, train_events, train_ratio = _event_stats(dataset.events, train_idx)
         val_count, val_events, val_ratio = _event_stats(dataset.events, val_idx)
+        train_groups = _group_count(dataset, train_idx)
+        val_groups = _group_count(dataset, val_idx)
         print(
-            f"[Fold {fold_id}] train={train_count} events={train_events} ({train_ratio:.2%}) | "
-            f"val={val_count} events={val_events} ({val_ratio:.2%})"
+            f"[Fold {fold_id}] train={train_count} samples / {train_groups} groups({group_field}) "
+            f"events={train_events} ({train_ratio:.2%}) | "
+            f"val={val_count} samples / {val_groups} groups({group_field}) "
+            f"events={val_events} ({val_ratio:.2%})"
         )
 
         pos_weight = _compute_pos_weight(dataset.events, np.array(train_idx)) * cfg.pos_weight_mult
@@ -1191,6 +1353,7 @@ def run_training(cfg: TrainConfig) -> dict:
         dataset = ECGCSVSurvDataset(cfg.manifest, cfg.csv_dir, breaks, preprocessing, cfg.task_mode)
     else:
         dataset = ECGXMLSurvDataset(cfg.manifest, cfg.xml_dir, breaks, preprocessing, cfg.task_mode)
+    group_field = _dataset_group_field(dataset)
 
     if cfg.cv_folds and cfg.cv_folds > 1:
         print("[split] 已启用交叉验证，train_ratio/val_ratio/test_ratio 将被忽略。")
@@ -1212,14 +1375,21 @@ def run_training(cfg: TrainConfig) -> dict:
 
     # 打印数据规模与事件比例，方便快速了解数据集
     num_samples = len(dataset)
+    num_groups = len(_dataset_groups(dataset))
     num_events = int(dataset.events.sum())
     event_ratio = num_events / num_samples if num_samples else 0.0
     print(
-        f"Dataset: {num_samples} samples | events: {num_events} ({event_ratio:.2%})"
+        f"Dataset: {num_samples} samples | groups({group_field}): {num_groups} | events: {num_events} ({event_ratio:.2%})"
         f" | leads:{len(leads)} ({cfg.lead_mode})"
         f" | split_ratio -> train:{cfg.train_ratio:.2f} val:{cfg.val_ratio:.2f} test:{cfg.test_ratio:.2f}"
         f" | splits -> train:{len(train_set)} val:{len(val_set)} test:{len(test_set)}"
     )
+    if isinstance(train_set, Subset) and isinstance(val_set, Subset) and isinstance(test_set, Subset):
+        print(
+            f"[split] groups({group_field}) -> train:{_group_count(dataset, np.array(train_set.indices))} "
+            f"val:{_group_count(dataset, np.array(val_set.indices))} "
+            f"test:{_group_count(dataset, np.array(test_set.indices))}"
+        )
 
     train_indices = train_set.indices if isinstance(train_set, Subset) else None
     pos_weight = _compute_pos_weight(

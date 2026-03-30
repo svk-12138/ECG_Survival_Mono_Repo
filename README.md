@@ -12,6 +12,11 @@ Win11 医生用户请直接看这 3 个文件：
 - [scripts/train_stroke_thesis.bat](scripts/train_stroke_thesis.bat)
 - [docs/stroke_survival_thesis_framework.md](docs/stroke_survival_thesis_framework.md)
 
+如果医生需要先把原始标签表处理成训练 manifest，再看：
+
+- [docs/survival_data_preparation_workflow.md](docs/survival_data_preparation_workflow.md)
+- [scripts/prepare_survival_dataset.py](scripts/prepare_survival_dataset.py)
+
 最简单的启动方式：
 
 ```bat
@@ -65,5 +70,6 @@ python3 scripts/run_pipeline.py --stages survival
 ## 其他文档
 
 - [docs/stroke_survival_thesis_framework.md](docs/stroke_survival_thesis_framework.md)
+- [docs/survival_data_preparation_workflow.md](docs/survival_data_preparation_workflow.md)
 - [docs/paper_reproduction_gap_analysis_20260317.md](docs/paper_reproduction_gap_analysis_20260317.md)
 - [docs/pipelines.md](docs/pipelines.md)

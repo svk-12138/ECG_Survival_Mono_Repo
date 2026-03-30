@@ -2,6 +2,12 @@
 
 这份说明按 Win11 医生用户来写。
 
+如果你的数据还没有整理成训练用 `manifest.json`，请先看：
+
+- [docs/survival_data_preparation_workflow.md](survival_data_preparation_workflow.md)
+
+新的训练入口支持先运行数据处理，再自动读取生成的 `training_inputs.json`。
+
 ## 第 1 步：改参数文件
 
 请打开：
@@ -44,6 +50,15 @@ $TaskMode = "prediction"
 $LeadMode = "12lead"
 ```
 
+如果同目录附近已经有 `processed\training_inputs.json`，脚本会自动优先读取：
+
+- `Manifest`
+- `XmlDir / CsvDir`
+- `LeadMode`
+- `WaveformType`
+
+这时你通常不需要再手动改这些路径，只需要确认任务类型和训练参数。
+
 如果你用的是 CSV：
 
 ```powershell
@@ -81,6 +96,11 @@ scripts\train_stroke_thesis.bat
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\train_stroke_thesis.ps1
 ```
+
+如果你先运行过 `scripts/prepare_survival_dataset.py`，推荐顺序是：
+
+1. 先生成 `processed\manifest.json` 和 `processed\training_inputs.json`
+2. 再运行 `scripts\train_stroke_thesis.bat`
 
 ## 跑完后去哪里看结果
 
@@ -150,6 +170,7 @@ $ApplyFilters = $true
 - 默认按 0.8 / 0.2 做训练集和验证集划分
 - 测试集先留空，避免小样本下过度切薄
 - 打开 ECG 滤波，补上杂波处理
+- 新数据统一按 `patient_SN` 分组，避免患者泄露
 
 ## Linux / macOS / WSL 用户怎么用
 

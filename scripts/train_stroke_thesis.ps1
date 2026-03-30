@@ -35,6 +35,26 @@ function Resolve-PythonCommand {
         }
     }
 
+    $BundledCandidates = @(
+        (Join-Path $Root '..\..\runtime\env\python.exe'),
+        (Join-Path $Root '..\runtime\env\python.exe'),
+        (Join-Path $Root 'runtime\env\python.exe')
+    )
+    foreach ($candidate in $BundledCandidates) {
+        try {
+            $resolved = [System.IO.Path]::GetFullPath($candidate)
+        }
+        catch {
+            continue
+        }
+        if (Test-Path -LiteralPath $resolved) {
+            return @{
+                Command = $resolved
+                PrefixArgs = @()
+            }
+        }
+    }
+
     $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
     if ($pythonCmd) {
         return @{
@@ -74,8 +94,47 @@ function Resolve-RepoPath {
     return Join-Path $Root $Value
 }
 
+function Test-IsPlaceholderPath {
+    param([string]$Value)
+    if (-not (Test-NonEmpty $Value)) {
+        return $true
+    }
+    return $Value -like "D:\your\path\*"
+}
+
+function Get-AutoTrainingInputs {
+    $Candidates = @(
+        (Join-Path $Root 'processed\training_inputs.json'),
+        (Join-Path $Root '..\processed\training_inputs.json'),
+        (Join-Path $Root '..\..\processed\training_inputs.json')
+    )
+    foreach ($candidate in $Candidates) {
+        try {
+            $resolved = [System.IO.Path]::GetFullPath($candidate)
+        }
+        catch {
+            continue
+        }
+        if (-not (Test-Path -LiteralPath $resolved)) {
+            continue
+        }
+        try {
+            $data = Get-Content -LiteralPath $resolved -Raw -Encoding UTF8 | ConvertFrom-Json
+            return @{
+                Path = $resolved
+                Data = $data
+            }
+        }
+        catch {
+            throw "[error] 无法读取自动训练配置: $resolved`n$($_.Exception.Message)"
+        }
+    }
+    return $null
+}
+
 # ==================== 必改参数 ====================
-# 标签文件：必须包含 patient_id / time / event
+# 如果仓库附近存在 processed\training_inputs.json，下面这些路径会自动优先读取；
+# 若要手动指定路径，再修改下面 3 个变量。
 $Manifest = "D:\your\path\stroke_manifest.json"
 
 # ECG 数据二选一：
@@ -161,6 +220,27 @@ $DeviceIds = ""
 $UseBestParams = $false
 $BestParams = "outputs\stroke_survival_thesis\best_params.json"
 # ==================================================
+
+$AutoTrainingInputs = Get-AutoTrainingInputs
+if ($AutoTrainingInputs) {
+    $AutoData = $AutoTrainingInputs.Data
+    if (Test-IsPlaceholderPath $Manifest) {
+        $Manifest = [string]$AutoData.manifest
+    }
+    if (Test-IsPlaceholderPath $XmlDir) {
+        $XmlDir = [string]$AutoData.xml_dir
+    }
+    if (Test-IsPlaceholderPath $CsvDir) {
+        $CsvDir = [string]$AutoData.csv_dir
+    }
+    if ($LeadMode -eq "12lead" -and (Test-NonEmpty ([string]$AutoData.recommended_lead_mode))) {
+        $LeadMode = [string]$AutoData.recommended_lead_mode
+    }
+    if ($WaveformType -eq "Rhythm" -and (Test-NonEmpty ([string]$AutoData.waveform_type))) {
+        $WaveformType = [string]$AutoData.waveform_type
+    }
+    Write-Host "[auto] 已加载训练输入配置: $($AutoTrainingInputs.Path)"
+}
 
 if (-not (Test-NonEmpty $Manifest)) {
     throw "[error] Manifest 不能为空"
@@ -279,6 +359,9 @@ Write-Host "  log_dir=$LogDirResolved"
 Write-Host "  prediction_horizon=$PredictionHorizon"
 Write-Host "  split_ratio=train:$TrainRatio val:$ValRatio test:$TestRatio"
 Write-Host "  cv_folds=$CVFolds"
+if ($AutoTrainingInputs) {
+    Write-Host "  auto_training_inputs=$($AutoTrainingInputs.Path)"
+}
 Write-Host "[cmd] $PythonBin $($PythonPrefixArgs -join ' ') $($CommandArgs -join ' ')"
 
 $ErrorActionPreference = "Continue"
