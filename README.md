@@ -6,15 +6,15 @@
 
 如果你现在做的是“1200 条卒中 ECG + time + event”的毕业论文，默认按 Win11 使用方式来操作。
 
-Win11 医生用户请直接看这 3 个文件：
+Win11 医生用户请优先看这 3 个文件：
 
 - [scripts/train_stroke_thesis.ps1](scripts/train_stroke_thesis.ps1)
 - [scripts/train_stroke_thesis.bat](scripts/train_stroke_thesis.bat)
-- [docs/stroke_survival_thesis_framework.md](docs/stroke_survival_thesis_framework.md)
+- [docs/卒中论文训练操作手册.md](docs/卒中论文训练操作手册.md)
 
-如果医生需要先把原始标签表处理成训练 manifest，再看：
+如果你手里现在只有原始标签表和 XML，还没有整理成训练数据，再看：
 
-- [docs/survival_data_preparation_workflow.md](docs/survival_data_preparation_workflow.md)
+- [docs/卒中论文数据处理操作手册.md](docs/卒中论文数据处理操作手册.md)
 - [scripts/prepare_survival_dataset.py](scripts/prepare_survival_dataset.py)
 
 最简单的启动方式：
@@ -29,7 +29,7 @@ scripts\train_stroke_thesis.bat
 2. 修改脚本顶部参数后运行 `scripts\train_stroke_thesis.bat`
 
 路径既支持绝对路径，也支持相对仓库根目录的路径；如果路径里有空格或中文，保留双引号即可。
-默认留出法比例已经改成 train=0.8、val=0.2、test=0.0；如果把 `cv_folds` 改成大于 1，就会切换回交叉验证，此时比例参数会被忽略。
+默认留出法比例已经改成 train=0.8、val=0.2、test=0.0；如果把 `$CVFolds` 改成大于 1，就会切换回交叉验证，此时比例参数会被忽略。
 
 如果你是 Linux / macOS / WSL 用户，再使用：
 
@@ -69,7 +69,7 @@ python3 scripts/run_pipeline.py --stages survival
 
 ## 其他文档
 
-- [docs/stroke_survival_thesis_framework.md](docs/stroke_survival_thesis_framework.md)
-- [docs/survival_data_preparation_workflow.md](docs/survival_data_preparation_workflow.md)
+- [docs/卒中论文训练操作手册.md](docs/卒中论文训练操作手册.md)
+- [docs/卒中论文数据处理操作手册.md](docs/卒中论文数据处理操作手册.md)
 - [docs/paper_reproduction_gap_analysis_20260317.md](docs/paper_reproduction_gap_analysis_20260317.md)
 - [docs/pipelines.md](docs/pipelines.md)
