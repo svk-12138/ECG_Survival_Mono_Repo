@@ -64,7 +64,7 @@ def _build_preprocessing_config(args: argparse.Namespace) -> ECGPreprocessingCon
 
 def _build_patient_index(xml_dir: Path) -> Dict[str, Path]:
     index: Dict[str, Path] = {}
-    for xml_file in xml_dir.glob("*.xml"):
+    for xml_file in xml_dir.rglob("*.xml"):
         try:
             root = ET.fromstring(xml_file.read_text(encoding="iso-8859-1"))
             pid = root.findtext(".//PatientDemographics/PatientID")
@@ -80,7 +80,7 @@ def _build_patient_index(xml_dir: Path) -> Dict[str, Path]:
 
 def _build_csv_index(csv_dir: Path) -> Dict[str, Path]:
     index: Dict[str, Path] = {}
-    for csv_file in csv_dir.glob("*.csv"):
+    for csv_file in csv_dir.rglob("*.csv"):
         stem = csv_file.stem
         if stem.endswith("_median"):
             stem = stem[: -len("_median")]
@@ -96,11 +96,37 @@ def _build_csv_index(csv_dir: Path) -> Dict[str, Path]:
     return index
 
 
+def _resolve_manifest_waveform_path(base_dir: Path, row: dict, field_name: str) -> Path | None:
+    raw_value = row.get(field_name)
+    if raw_value is None:
+        return None
+    text = str(raw_value).strip()
+    if not text:
+        return None
+    candidate = Path(text)
+    path = candidate if candidate.is_absolute() else (base_dir / candidate)
+    path = path.resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"{field_name} 指向的文件不存在: {path}")
+    return path
+
+
+def _row_has_manifest_waveform_path(row: dict, field_name: str) -> bool:
+    raw_value = row.get(field_name)
+    if raw_value is None:
+        return False
+    return bool(str(raw_value).strip())
+
+
 class ECGXMLInferDataset(Dataset):
     def __init__(self, manifest_json: Path, xml_dir: Path, preprocessing: ECGPreprocessingConfig):
         self.rows = _load_manifest(manifest_json)
         self.preprocessing = preprocessing
-        self.patient_index = _build_patient_index(xml_dir)
+        self.xml_dir = xml_dir
+        self.use_patient_index_fallback = any(
+            not _row_has_manifest_waveform_path(row, "xml_file") for row in self.rows
+        )
+        self.patient_index = _build_patient_index(xml_dir) if self.use_patient_index_fallback else {}
 
     def __len__(self) -> int:
         return len(self.rows)
@@ -108,9 +134,12 @@ class ECGXMLInferDataset(Dataset):
     def __getitem__(self, idx: int):
         row = self.rows[idx]
         pid = str(row["patient_id"])
-        if pid not in self.patient_index:
-            raise FileNotFoundError(f"PatientID {pid} 在 XML 目录中未找到")
-        x = load_xml_ecg(self.patient_index[pid], self.preprocessing)
+        xml_path = _resolve_manifest_waveform_path(self.xml_dir, row, "xml_file")
+        if xml_path is None:
+            if pid not in self.patient_index:
+                raise FileNotFoundError(f"PatientID {pid} 在 XML 目录中未找到")
+            xml_path = self.patient_index[pid]
+        x = load_xml_ecg(xml_path, self.preprocessing)
         return pid, torch.from_numpy(x).float()
 
 
@@ -118,7 +147,11 @@ class ECGCSVInferDataset(Dataset):
     def __init__(self, manifest_json: Path, csv_dir: Path, preprocessing: ECGPreprocessingConfig):
         self.rows = _load_manifest(manifest_json)
         self.preprocessing = preprocessing
-        self.csv_index = _build_csv_index(csv_dir)
+        self.csv_dir = csv_dir
+        self.use_csv_index_fallback = any(
+            not _row_has_manifest_waveform_path(row, "csv_file") for row in self.rows
+        )
+        self.csv_index = _build_csv_index(csv_dir) if self.use_csv_index_fallback else {}
 
     def __len__(self) -> int:
         return len(self.rows)
@@ -126,9 +159,12 @@ class ECGCSVInferDataset(Dataset):
     def __getitem__(self, idx: int):
         row = self.rows[idx]
         pid = str(row["patient_id"])
-        if pid not in self.csv_index:
-            raise FileNotFoundError(f"PatientID {pid} 在 CSV 目录中未找到")
-        x = load_csv_ecg(self.csv_index[pid], self.preprocessing)
+        csv_path = _resolve_manifest_waveform_path(self.csv_dir, row, "csv_file")
+        if csv_path is None:
+            if pid not in self.csv_index:
+                raise FileNotFoundError(f"PatientID {pid} 在 CSV 目录中未找到")
+            csv_path = self.csv_index[pid]
+        x = load_csv_ecg(csv_path, self.preprocessing)
         return pid, torch.from_numpy(x).float()
 
 

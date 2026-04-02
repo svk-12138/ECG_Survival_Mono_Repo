@@ -190,10 +190,14 @@ def _build_preprocessing_config(cfg: TrainConfig) -> ECGPreprocessingConfig:
 
 
 def _build_patient_index(xml_dir: Path) -> Dict[str, Path]:
-    """遍历 XML 目录，建立 patient_id → 最新 XML 文件的映射。"""
+    """遍历 XML 目录，建立 patient_id → 最新 XML 文件的映射。
+
+    仅当 manifest 没有提供 `xml_file` 时，才需要退回到这条旧匹配链路。
+    因此这里保留 PatientID 匹配兼容性，但不应再成为默认前置依赖。
+    """
 
     index: Dict[str, Path] = {}
-    for xml_file in xml_dir.glob('*.xml'):
+    for xml_file in xml_dir.rglob('*.xml'):
         try:
             root = ET.fromstring(xml_file.read_text(encoding="iso-8859-1"))
             pid = root.findtext('.//PatientDemographics/PatientID')
@@ -209,7 +213,7 @@ def _build_patient_index(xml_dir: Path) -> Dict[str, Path]:
 
 def _build_csv_index(csv_dir: Path) -> Dict[str, Path]:
     index: Dict[str, Path] = {}
-    for csv_file in csv_dir.glob("*.csv"):
+    for csv_file in csv_dir.rglob("*.csv"):
         stem = csv_file.stem
         if stem.endswith("_median"):
             stem = stem[: -len("_median")]
@@ -238,6 +242,13 @@ def _resolve_manifest_waveform_path(base_dir: Path, row: dict, field_name: str) 
     if not path.exists():
         raise FileNotFoundError(f"{field_name} 指向的文件不存在: {path}")
     return path
+
+
+def _row_has_manifest_waveform_path(row: dict, field_name: str) -> bool:
+    raw_value = row.get(field_name)
+    if raw_value is None:
+        return False
+    return bool(str(raw_value).strip())
 
 
 def _compute_pos_weight(events: np.ndarray, indices: list[int] | np.ndarray | None = None) -> float:
@@ -393,7 +404,12 @@ class ECGXMLSurvDataset(_BaseECGDataset):
     ):
         super().__init__(manifest_json, breaks, preprocessing, task_mode)
         self.xml_dir = xml_dir
-        self.patient_index = _build_patient_index(self.xml_dir)
+        # 新版 manifest 已经支持逐条记录 `xml_file`，这时应直接按文件名/路径取样本，
+        # 不再强依赖 XML 内部必须存在可匹配的 PatientID。
+        self.use_patient_index_fallback = any(
+            not _row_has_manifest_waveform_path(row, "xml_file") for row in self.rows
+        )
+        self.patient_index = _build_patient_index(self.xml_dir) if self.use_patient_index_fallback else {}
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         row = self.rows[idx]
@@ -427,7 +443,10 @@ class ECGCSVSurvDataset(_BaseECGDataset):
     ):
         super().__init__(manifest_json, breaks, preprocessing, task_mode)
         self.csv_dir = csv_dir
-        self.csv_index = _build_csv_index(self.csv_dir)
+        self.use_csv_index_fallback = any(
+            not _row_has_manifest_waveform_path(row, "csv_file") for row in self.rows
+        )
+        self.csv_index = _build_csv_index(self.csv_dir) if self.use_csv_index_fallback else {}
 
     def __len__(self):
         return len(self.rows)
