@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import math
 import re
 import xml.etree.ElementTree as ET
@@ -180,6 +181,28 @@ def _parse_xml_root(xml_path: Path, xml_encoding: str) -> ET.Element:
     raise ValueError(f"XML 解析失败: {xml_path} | tried={'; '.join(errors)}")
 
 
+def _decode_waveform_bytes(waveform_data: str, xml_path: Path, lead_id: str) -> bytes:
+    compact = re.sub(r"\s+", "", waveform_data or "")
+    if not compact:
+        raise ValueError(f"WaveFormData 为空: {xml_path} | lead={lead_id}")
+
+    normalized = compact.replace("-", "+").replace("_", "/")
+    padding = (-len(normalized)) % 4
+    if padding:
+        normalized = normalized + ("=" * padding)
+
+    try:
+        raw = base64.b64decode(normalized, validate=True)
+    except binascii.Error as exc:
+        raise ValueError(
+            f"WaveFormData base64 解码失败: {xml_path} | lead={lead_id} | text_len={len(compact)} | {exc}"
+        ) from exc
+
+    if len(raw) % 2 != 0:
+        raise ValueError(f"WaveFormData 解码后字节数不是 2 的倍数: {xml_path} | lead={lead_id} | bytes={len(raw)}")
+    return raw
+
+
 def _decode_xml_leads(xml_path: Path, leads: Sequence[str], waveform_type: str, xml_encoding: str) -> tuple[float | None, Dict[str, np.ndarray]]:
     root = _parse_xml_root(xml_path, xml_encoding)
     waveform = _find_waveform_node(root, waveform_type)
@@ -193,7 +216,7 @@ def _decode_xml_leads(xml_path: Path, leads: Sequence[str], waveform_type: str, 
         if lead_id not in lead_signals:
             continue
         waveform_data = lead_data.findtext("WaveFormData") or ""
-        raw = base64.b64decode(re.sub(r"\s+", "", waveform_data))
+        raw = _decode_waveform_bytes(waveform_data, xml_path, lead_id)
         signal = np.frombuffer(raw, dtype="<i2").astype(np.float32)
         units_per_bit = float(lead_data.findtext("LeadAmplitudeUnitsPerBit") or 1.0)
         signal = signal * units_per_bit

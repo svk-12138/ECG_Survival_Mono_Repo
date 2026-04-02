@@ -14,20 +14,22 @@ if str(MODULE_ROOT) not in sys.path:
 from torch_survival.ecg_preprocessing import ECGPreprocessingConfig, LEADS_KEEP_8, load_xml_ecg
 
 
-def _lead_waveform_base64() -> str:
+def _lead_waveform_base64(strip_padding: bool = False) -> str:
     signal = np.array([0, 100, -50, 25], dtype="<i2")
-    return base64.b64encode(signal.tobytes()).decode("ascii")
+    encoded = base64.b64encode(signal.tobytes()).decode("ascii")
+    return encoded.rstrip("=") if strip_padding else encoded
 
 
-def write_xml(path: Path, encoding: str) -> None:
+def write_xml(path: Path, encoding: str, strip_padding: bool = False, invalid_lead: str | None = None) -> None:
     lead_data = []
     for lead in LEADS_KEEP_8:
+        waveform = "!!!" if lead == invalid_lead else _lead_waveform_base64(strip_padding=strip_padding)
         lead_data.append(
             f"""
     <LeadData>
       <LeadID>{lead}</LeadID>
       <LeadAmplitudeUnitsPerBit>1.0</LeadAmplitudeUnitsPerBit>
-      <WaveFormData>{_lead_waveform_base64()}</WaveFormData>
+      <WaveFormData>{waveform}</WaveFormData>
     </LeadData>"""
         )
 
@@ -58,6 +60,34 @@ class XMLParsingFallbackTest(unittest.TestCase):
             )
             x = load_xml_ecg(xml_path, cfg)
             self.assertEqual(x.shape, (8, 4))
+
+    def test_load_xml_ecg_supports_missing_base64_padding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            xml_path = Path(tmpdir) / "missing_padding.xml"
+            write_xml(xml_path, encoding="utf-8", strip_padding=True)
+
+            cfg = ECGPreprocessingConfig(
+                leads=LEADS_KEEP_8,
+                target_len=4,
+                apply_filters=False,
+                normalize=False,
+            )
+            x = load_xml_ecg(xml_path, cfg)
+            self.assertEqual(x.shape, (8, 4))
+
+    def test_load_xml_ecg_reports_invalid_waveform_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            xml_path = Path(tmpdir) / "invalid_waveform.xml"
+            write_xml(xml_path, encoding="utf-8", invalid_lead="V3")
+
+            cfg = ECGPreprocessingConfig(
+                leads=LEADS_KEEP_8,
+                target_len=4,
+                apply_filters=False,
+                normalize=False,
+            )
+            with self.assertRaisesRegex(ValueError, r"invalid_waveform\.xml .* lead=V3"):
+                load_xml_ecg(xml_path, cfg)
 
 
 if __name__ == "__main__":
