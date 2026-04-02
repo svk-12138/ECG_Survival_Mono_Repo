@@ -20,6 +20,7 @@ from scipy.signal import butter, filtfilt, iirnotch, resample
 
 LEADS_KEEP_8 = ("I", "II", "V1", "V2", "V3", "V4", "V5", "V6")
 LEADS_KEEP_12 = ("I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6")
+_XML_ENCODING_FALLBACKS = ("iso-8859-1", "utf-8", "utf-8-sig")
 
 _TIME_COLUMN_CANDIDATES = ("time_ms", "time", "time_s", "t")
 
@@ -157,8 +158,30 @@ def _waveform_sample_rate(waveform: ET.Element) -> float | None:
         return None
 
 
+def _xml_encoding_candidates(preferred: str) -> list[str]:
+    ordered = [(preferred or "").strip(), * _XML_ENCODING_FALLBACKS]
+    result: list[str] = []
+    seen: set[str] = set()
+    for encoding in ordered:
+        if not encoding or encoding in seen:
+            continue
+        seen.add(encoding)
+        result.append(encoding)
+    return result
+
+
+def _parse_xml_root(xml_path: Path, xml_encoding: str) -> ET.Element:
+    errors: list[str] = []
+    for encoding in _xml_encoding_candidates(xml_encoding):
+        try:
+            return ET.fromstring(xml_path.read_text(encoding=encoding))
+        except Exception as exc:
+            errors.append(f"{encoding}: {type(exc).__name__}: {exc}")
+    raise ValueError(f"XML 解析失败: {xml_path} | tried={'; '.join(errors)}")
+
+
 def _decode_xml_leads(xml_path: Path, leads: Sequence[str], waveform_type: str, xml_encoding: str) -> tuple[float | None, Dict[str, np.ndarray]]:
-    root = ET.fromstring(xml_path.read_text(encoding=xml_encoding))
+    root = _parse_xml_root(xml_path, xml_encoding)
     waveform = _find_waveform_node(root, waveform_type)
     if waveform is None:
         raise ValueError(f"XML 中未找到可解析的 Waveform 节点: {xml_path}")
