@@ -196,6 +196,22 @@ def _decode_waveform_bytes(waveform_data: str, xml_path: Path, lead_id: str) -> 
             padded = padded + ("=" * padding)
         return base64.b64decode(padded, validate=validate)
 
+    def _repair_len_mod_4_eq_1(text: str) -> bytes | None:
+        if len(text) % 4 != 1 or len(text) <= 1:
+            return None
+        repaired = text[:-1]
+        try:
+            raw_bytes = _decode_base64_text(repaired, validate=False)
+        except binascii.Error:
+            return None
+        warnings.warn(
+            f"WaveFormData base64 长度为 4n+1，已自动裁掉末尾 1 个字符后解码: "
+            f"{xml_path} | lead={lead_id} | text_len={len(text)}->{len(repaired)}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return raw_bytes
+
     try:
         raw = _decode_base64_text(normalized, validate=True)
     except binascii.Error as exc:
@@ -206,19 +222,23 @@ def _decode_waveform_bytes(waveform_data: str, xml_path: Path, lead_id: str) -> 
                 f"WaveFormData base64 解码失败，清洗后为空: "
                 f"{xml_path} | lead={lead_id} | text_len={len(compact)} | {exc}"
             ) from exc
-        try:
-            raw = _decode_base64_text(cleaned, validate=False)
-        except binascii.Error as cleaned_exc:
-            raise ValueError(
-                f"WaveFormData base64 解码失败: {xml_path} | lead={lead_id} | "
-                f"text_len={len(compact)} | cleaned_text_len={len(cleaned)} | {cleaned_exc}"
-            ) from cleaned_exc
-        warnings.warn(
-            f"WaveFormData 含有非 base64 字符，已自动清洗后解码: "
-            f"{xml_path} | lead={lead_id} | removed_chars={removed}",
-            RuntimeWarning,
-            stacklevel=2,
-        )
+        repaired_raw = _repair_len_mod_4_eq_1(cleaned)
+        if repaired_raw is not None:
+            raw = repaired_raw
+        else:
+            try:
+                raw = _decode_base64_text(cleaned, validate=False)
+            except binascii.Error as cleaned_exc:
+                raise ValueError(
+                    f"WaveFormData base64 解码失败: {xml_path} | lead={lead_id} | "
+                    f"text_len={len(compact)} | cleaned_text_len={len(cleaned)} | {cleaned_exc}"
+                ) from cleaned_exc
+            warnings.warn(
+                f"WaveFormData 含有非 base64 字符，已自动清洗后解码: "
+                f"{xml_path} | lead={lead_id} | removed_chars={removed}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
     if len(raw) % 2 != 0:
         # 医疗设备导出的 XML 偶尔会在波形末尾多出 1 个脏字节。
