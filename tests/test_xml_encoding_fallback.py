@@ -2,6 +2,7 @@ import base64
 import sys
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +25,35 @@ def write_xml(path: Path, encoding: str, strip_padding: bool = False, invalid_le
     lead_data = []
     for lead in LEADS_KEEP_8:
         waveform = "!!!" if lead == invalid_lead else _lead_waveform_base64(strip_padding=strip_padding)
+        lead_data.append(
+            f"""
+    <LeadData>
+      <LeadID>{lead}</LeadID>
+      <LeadAmplitudeUnitsPerBit>1.0</LeadAmplitudeUnitsPerBit>
+      <WaveFormData>{waveform}</WaveFormData>
+    </LeadData>"""
+        )
+
+    xml_text = f"""<?xml version="1.0" encoding="UTF-8"?>
+<RestingECG>
+  <Waveform>
+    <WaveformType>Rhythm</WaveformType>
+    <SampleBase>500</SampleBase>
+    <SampleExponent>0</SampleExponent>
+    {''.join(lead_data)}
+  </Waveform>
+</RestingECG>
+"""
+    path.write_text(xml_text, encoding=encoding)
+
+
+def write_xml_with_odd_waveform_bytes(path: Path, encoding: str) -> None:
+    lead_data = []
+    for lead in LEADS_KEEP_8:
+        signal = np.array([0, 100, -50, 25], dtype="<i2").tobytes()
+        if lead == "I":
+            signal = signal + b"\x00"
+        waveform = base64.b64encode(signal).decode("ascii")
         lead_data.append(
             f"""
     <LeadData>
@@ -88,6 +118,24 @@ class XMLParsingFallbackTest(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, r"invalid_waveform\.xml .* lead=V3"):
                 load_xml_ecg(xml_path, cfg)
+
+    def test_load_xml_ecg_repairs_odd_waveform_byte_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            xml_path = Path(tmpdir) / "odd_waveform.xml"
+            write_xml_with_odd_waveform_bytes(xml_path, encoding="utf-8")
+
+            cfg = ECGPreprocessingConfig(
+                leads=LEADS_KEEP_8,
+                target_len=4,
+                apply_filters=False,
+                normalize=False,
+            )
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                x = load_xml_ecg(xml_path, cfg)
+
+            self.assertEqual(x.shape, (8, 4))
+            self.assertTrue(any("已自动裁掉最后 1 个字节" in str(item.message) for item in caught))
 
 
 if __name__ == "__main__":

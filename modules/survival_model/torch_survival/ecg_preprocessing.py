@@ -10,6 +10,7 @@ import base64
 import binascii
 import math
 import re
+import warnings
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -199,7 +200,22 @@ def _decode_waveform_bytes(waveform_data: str, xml_path: Path, lead_id: str) -> 
         ) from exc
 
     if len(raw) % 2 != 0:
-        raise ValueError(f"WaveFormData 解码后字节数不是 2 的倍数: {xml_path} | lead={lead_id} | bytes={len(raw)}")
+        # 医疗设备导出的 XML 偶尔会在波形末尾多出 1 个脏字节。
+        # 对 16-bit little-endian ECG 而言，裁掉最后 1 个字节即可恢复可解析的采样流，
+        # 比直接中断整批训练更符合医生使用场景。
+        repaired = raw[:-1]
+        if len(repaired) < 2:
+            raise ValueError(
+                f"WaveFormData 解码后字节数不是 2 的倍数，且无法修复: "
+                f"{xml_path} | lead={lead_id} | bytes={len(raw)}"
+            )
+        warnings.warn(
+            f"WaveFormData 字节数为奇数，已自动裁掉最后 1 个字节: "
+            f"{xml_path} | lead={lead_id} | bytes={len(raw)}->{len(repaired)}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        raw = repaired
     return raw
 
 
