@@ -76,6 +76,34 @@ def write_xml_with_odd_waveform_bytes(path: Path, encoding: str) -> None:
     path.write_text(xml_text, encoding=encoding)
 
 
+def write_xml_with_non_base64_noise(path: Path, encoding: str) -> None:
+    lead_data = []
+    for lead in LEADS_KEEP_8:
+        waveform = _lead_waveform_base64()
+        if lead == "I":
+            waveform = waveform[:4] + "#" + waveform[4:] + "!"
+        lead_data.append(
+            f"""
+    <LeadData>
+      <LeadID>{lead}</LeadID>
+      <LeadAmplitudeUnitsPerBit>1.0</LeadAmplitudeUnitsPerBit>
+      <WaveFormData>{waveform}</WaveFormData>
+    </LeadData>"""
+        )
+
+    xml_text = f"""<?xml version="1.0" encoding="UTF-8"?>
+<RestingECG>
+  <Waveform>
+    <WaveformType>Rhythm</WaveformType>
+    <SampleBase>500</SampleBase>
+    <SampleExponent>0</SampleExponent>
+    {''.join(lead_data)}
+  </Waveform>
+</RestingECG>
+"""
+    path.write_text(xml_text, encoding=encoding)
+
+
 class XMLParsingFallbackTest(unittest.TestCase):
     def test_load_xml_ecg_supports_utf8_bom(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -136,6 +164,24 @@ class XMLParsingFallbackTest(unittest.TestCase):
 
             self.assertEqual(x.shape, (8, 4))
             self.assertTrue(any("已自动裁掉最后 1 个字节" in str(item.message) for item in caught))
+
+    def test_load_xml_ecg_repairs_non_base64_noise(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            xml_path = Path(tmpdir) / "noisy_waveform.xml"
+            write_xml_with_non_base64_noise(xml_path, encoding="utf-8")
+
+            cfg = ECGPreprocessingConfig(
+                leads=LEADS_KEEP_8,
+                target_len=4,
+                apply_filters=False,
+                normalize=False,
+            )
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                x = load_xml_ecg(xml_path, cfg)
+
+            self.assertEqual(x.shape, (8, 4))
+            self.assertTrue(any("已自动清洗后解码" in str(item.message) for item in caught))
 
 
 if __name__ == "__main__":

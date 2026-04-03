@@ -188,16 +188,37 @@ def _decode_waveform_bytes(waveform_data: str, xml_path: Path, lead_id: str) -> 
         raise ValueError(f"WaveFormData 为空: {xml_path} | lead={lead_id}")
 
     normalized = compact.replace("-", "+").replace("_", "/")
-    padding = (-len(normalized)) % 4
-    if padding:
-        normalized = normalized + ("=" * padding)
+
+    def _decode_base64_text(text: str, *, validate: bool) -> bytes:
+        padded = text
+        padding = (-len(padded)) % 4
+        if padding:
+            padded = padded + ("=" * padding)
+        return base64.b64decode(padded, validate=validate)
 
     try:
-        raw = base64.b64decode(normalized, validate=True)
+        raw = _decode_base64_text(normalized, validate=True)
     except binascii.Error as exc:
-        raise ValueError(
-            f"WaveFormData base64 解码失败: {xml_path} | lead={lead_id} | text_len={len(compact)} | {exc}"
-        ) from exc
+        cleaned = re.sub(r"[^A-Za-z0-9+/=]", "", normalized)
+        removed = len(normalized) - len(cleaned)
+        if not cleaned:
+            raise ValueError(
+                f"WaveFormData base64 解码失败，清洗后为空: "
+                f"{xml_path} | lead={lead_id} | text_len={len(compact)} | {exc}"
+            ) from exc
+        try:
+            raw = _decode_base64_text(cleaned, validate=False)
+        except binascii.Error as cleaned_exc:
+            raise ValueError(
+                f"WaveFormData base64 解码失败: {xml_path} | lead={lead_id} | "
+                f"text_len={len(compact)} | cleaned_text_len={len(cleaned)} | {cleaned_exc}"
+            ) from cleaned_exc
+        warnings.warn(
+            f"WaveFormData 含有非 base64 字符，已自动清洗后解码: "
+            f"{xml_path} | lead={lead_id} | removed_chars={removed}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     if len(raw) % 2 != 0:
         # 医疗设备导出的 XML 偶尔会在波形末尾多出 1 个脏字节。
