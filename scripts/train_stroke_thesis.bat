@@ -1,6 +1,6 @@
 @echo off
 REM Windows launcher for stroke thesis training.
-REM Edit train_stroke_thesis.ps1 instead of this file.
+REM Edit configs\train_stroke_thesis.env instead of this file.
 
 chcp 65001 >nul
 set PYTHONUTF8=1

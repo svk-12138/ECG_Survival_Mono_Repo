@@ -25,6 +25,7 @@ env/
 
 # Local datasets and generated artifacts
 data/raw/
+debug_outputs/
 logs/
 output/
 outputs/
@@ -46,3 +47,6 @@ modules/survival_model/training_logs.zip
 # Local root artifacts
 /1.653896_leads.csv
 /1.653896_leads_plot.png
+
+# Local training config
+/configs/train_stroke_thesis.env
