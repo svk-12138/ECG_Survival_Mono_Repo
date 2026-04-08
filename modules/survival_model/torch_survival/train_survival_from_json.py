@@ -611,6 +611,124 @@ def evaluate(
     }
 
 
+def _subset_indices_array(subset) -> np.ndarray:
+    if isinstance(subset, Subset):
+        return np.array(subset.indices, dtype=np.int64)
+    return np.arange(len(subset), dtype=np.int64)
+
+
+def _export_subset_risk_scores(
+    model,
+    subset,
+    dataset: _BaseECGDataset,
+    cfg: TrainConfig,
+    device: torch.device,
+    split_name: str,
+    output_dir: Path,
+    breaks: SurvivalBreaks,
+) -> Path | None:
+    subset_indices = _subset_indices_array(subset)
+    if subset_indices.size == 0:
+        print(f"[export] 已跳过 {split_name} risk_score 导出：当前子集为空。")
+        return None
+
+    loader = DataLoader(
+        subset,
+        batch_size=cfg.batch,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+    )
+    model.eval()
+    scores: list[float] = []
+    with torch.no_grad():
+        for xb, _, _, _ in loader:
+            xb = xb.to(device=device, dtype=torch.float32)
+            logits = model(xb)
+            if cfg.task_mode == "prediction":
+                logits = logits.view(xb.size(0), cfg.n_intervals)
+            else:
+                logits = logits.view(-1)
+            batch_scores, _ = _scores_from_logits(
+                logits,
+                cfg.task_mode,
+                breaks,
+                cfg.prediction_horizon,
+            )
+            scores.extend(float(score) for score in batch_scores)
+
+    if len(scores) != len(subset_indices):
+        raise RuntimeError(
+            f"{split_name} risk_score 导出失败：分数数量 {len(scores)} 与样本数量 {len(subset_indices)} 不一致"
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{split_name}_risk_scores.csv"
+    _, resolved_horizon = _resolve_prediction_interval(
+        breaks,
+        cfg.prediction_horizon if cfg.task_mode == "prediction" else None,
+    )
+    fieldnames = [
+        "split",
+        "sample_id",
+        "patient_SN",
+        "patient_id",
+        "event",
+        "time",
+        "risk_score",
+        "task_mode",
+        "risk_horizon",
+    ]
+    with output_path.open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for dataset_idx, score in zip(subset_indices.tolist(), scores):
+            row = dataset.rows[int(dataset_idx)]
+            patient_id = str(row.get("patient_id", "")).strip()
+            writer.writerow(
+                {
+                    "split": split_name,
+                    "sample_id": patient_id,
+                    "patient_SN": str(row.get("patient_SN", "")).strip(),
+                    "patient_id": patient_id,
+                    "event": int(dataset.events[int(dataset_idx)]),
+                    "time": float(dataset.times[int(dataset_idx)]),
+                    "risk_score": float(score),
+                    "task_mode": cfg.task_mode,
+                    "risk_horizon": float(resolved_horizon) if cfg.task_mode == "prediction" else "",
+                }
+            )
+    print(f"[export] {split_name} risk_score 已保存到 {output_path}")
+    return output_path
+
+
+def _export_holdout_risk_scores(
+    model,
+    dataset: _BaseECGDataset,
+    train_set,
+    val_set,
+    test_set,
+    cfg: TrainConfig,
+    device: torch.device,
+    breaks: SurvivalBreaks,
+) -> dict[str, str]:
+    output_dir = cfg.log_dir / "predictions"
+    exports: dict[str, str] = {}
+    for split_name, subset in (("train", train_set), ("val", val_set), ("test", test_set)):
+        output_path = _export_subset_risk_scores(
+            model=model,
+            subset=subset,
+            dataset=dataset,
+            cfg=cfg,
+            device=device,
+            split_name=split_name,
+            output_dir=output_dir,
+            breaks=breaks,
+        )
+        if output_path is not None:
+            exports[split_name] = str(output_path)
+    return exports
+
+
 def _validate_split_ratios(train_ratio: float, val_ratio: float, test_ratio: float) -> tuple[float, float, float]:
     """校验留出法比例配置。"""
 
@@ -1376,6 +1494,7 @@ def run_training(cfg: TrainConfig) -> dict:
 
     if cfg.cv_folds and cfg.cv_folds > 1:
         print("[split] 已启用交叉验证，train_ratio/val_ratio/test_ratio 将被忽略。")
+        print("[export] 已跳过自动 risk_score 导出：当前仅在 holdout 模式下导出 train/val/test CSV。")
         return _run_cross_validation(cfg, dataset, device, device_ids)
 
     train_set, val_set, test_set = _split_dataset(
@@ -1453,7 +1572,22 @@ def run_training(cfg: TrainConfig) -> dict:
             f"f1={test_metrics['f1']:.4f} "
             f"brier={test_metrics['brier']:.4f}"
         )
-    return {"train": train_metrics, "val": val_metrics, "test": test_metrics}
+    risk_score_exports = _export_holdout_risk_scores(
+        model=model,
+        dataset=dataset,
+        train_set=train_set,
+        val_set=val_set,
+        test_set=test_set,
+        cfg=cfg,
+        device=device,
+        breaks=breaks,
+    )
+    return {
+        "train": train_metrics,
+        "val": val_metrics,
+        "test": test_metrics,
+        "risk_score_exports": risk_score_exports,
+    }
 
 
 def main():
