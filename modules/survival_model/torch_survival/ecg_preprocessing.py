@@ -23,6 +23,7 @@ from scipy.signal import butter, filtfilt, iirnotch, resample
 LEADS_KEEP_8 = ("I", "II", "V1", "V2", "V3", "V4", "V5", "V6")
 LEADS_KEEP_12 = ("I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6")
 _XML_ENCODING_FALLBACKS = ("iso-8859-1", "utf-8", "utf-8-sig")
+_PLAIN_INTEGER_WAVEFORM_RE = re.compile(r"^[+-]?\d+(?: [+-]?\d+)*$")
 
 _TIME_COLUMN_CANDIDATES = ("time_ms", "time", "time_s", "t")
 
@@ -182,6 +183,42 @@ def _parse_xml_root(xml_path: Path, xml_encoding: str) -> ET.Element:
     raise ValueError(f"XML 解析失败: {xml_path} | tried={'; '.join(errors)}")
 
 
+def _normalize_lead_id(lead_id: str) -> str:
+    """将不同来源的导联名统一到可比较的形式。
+
+    真实 XML 中增强导联经常写成 AVR/AVL/AVF，大写形式需要和
+    项目内部使用的 aVR/aVL/aVF 视为同一导联。
+    """
+
+    return str(lead_id).strip().upper()
+
+
+def _decode_plaintext_waveform(
+    waveform_data: str,
+    xml_path: Path,
+    lead_id: str,
+) -> np.ndarray | None:
+    """解析空格分隔的明文整数波形。
+
+    一些 MUSE/MAC 系列 XML 不使用 base64，而是直接把采样值写成
+    `6 7 9 5 ...` 这样的整数序列。这里先做检测，命中后直接解析，
+    避免误走 base64 分支。
+    """
+
+    raw_text = waveform_data or ""
+    if not re.search(r"[\s,;]", raw_text):
+        return None
+
+    normalized = re.sub(r"[\s,;]+", " ", raw_text).strip()
+    if not normalized or not _PLAIN_INTEGER_WAVEFORM_RE.fullmatch(normalized):
+        return None
+
+    signal = np.fromstring(normalized, sep=" ", dtype=np.float32)
+    if signal.size == 0:
+        raise ValueError(f"明文 WaveFormData 解析失败: {xml_path} | lead={lead_id}")
+    return signal
+
+
 def _decode_waveform_bytes(waveform_data: str, xml_path: Path, lead_id: str) -> bytes:
     compact = re.sub(r"\s+", "", waveform_data or "")
     if not compact:
@@ -260,6 +297,15 @@ def _decode_waveform_bytes(waveform_data: str, xml_path: Path, lead_id: str) -> 
     return raw
 
 
+def _decode_waveform_signal(waveform_data: str, xml_path: Path, lead_id: str) -> np.ndarray:
+    plaintext_signal = _decode_plaintext_waveform(waveform_data, xml_path, lead_id)
+    if plaintext_signal is not None:
+        return plaintext_signal
+
+    raw = _decode_waveform_bytes(waveform_data, xml_path, lead_id)
+    return np.frombuffer(raw, dtype="<i2").astype(np.float32)
+
+
 def _decode_xml_leads(xml_path: Path, leads: Sequence[str], waveform_type: str, xml_encoding: str) -> tuple[float | None, Dict[str, np.ndarray]]:
     root = _parse_xml_root(xml_path, xml_encoding)
     waveform = _find_waveform_node(root, waveform_type)
@@ -267,19 +313,20 @@ def _decode_xml_leads(xml_path: Path, leads: Sequence[str], waveform_type: str, 
         raise ValueError(f"XML 中未找到可解析的 Waveform 节点: {xml_path}")
     sample_rate = _waveform_sample_rate(waveform)
 
+    requested_leads = {_normalize_lead_id(lead): lead for lead in leads}
     lead_signals: Dict[str, np.ndarray | None] = {lead: None for lead in leads}
     for lead_data in waveform.findall(".//LeadData"):
         lead_id = (lead_data.findtext("LeadID") or "").strip()
-        if lead_id not in lead_signals:
+        requested_lead = requested_leads.get(_normalize_lead_id(lead_id))
+        if requested_lead is None:
             continue
         waveform_data = lead_data.findtext("WaveFormData") or ""
-        raw = _decode_waveform_bytes(waveform_data, xml_path, lead_id)
-        signal = np.frombuffer(raw, dtype="<i2").astype(np.float32)
+        signal = _decode_waveform_signal(waveform_data, xml_path, lead_id)
         units_per_bit = float(lead_data.findtext("LeadAmplitudeUnitsPerBit") or 1.0)
         signal = signal * units_per_bit
-        previous = lead_signals[lead_id]
+        previous = lead_signals[requested_lead]
         if previous is None or signal.shape[0] > previous.shape[0]:
-            lead_signals[lead_id] = signal
+            lead_signals[requested_lead] = signal
 
     missing = [lead for lead, signal in lead_signals.items() if signal is None]
     if missing:

@@ -32,6 +32,24 @@ import build_manifest_from_event_csv as manifest_builder
 from modules.survival_model.torch_survival.ecg_preprocessing import LEADS_KEEP_8, LEADS_KEEP_12
 
 
+def _normalize_lead_id(lead_id: str) -> str:
+    """将导联名转成大小写无关的比较形式。"""
+
+    return str(lead_id).strip().upper()
+
+
+def _canonical_lead_id(lead_id: str) -> str:
+    """把 XML 里的导联名统一成项目内部常用显示形式。"""
+
+    raw = str(lead_id).strip()
+    mapping = {
+        "AVR": "aVR",
+        "AVL": "aVL",
+        "AVF": "aVF",
+    }
+    return mapping.get(_normalize_lead_id(raw), raw)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Prepare survival manifest and audits from doctor labels + XML.")
     parser.add_argument("--labels", type=Path, required=True, help="Doctor CSV/Excel labels file.")
@@ -66,22 +84,25 @@ def _parse_xml_root(xml_path: Path, encodings: list[str]) -> ET.Element:
 
 def _waveform_leads(root: ET.Element) -> list[dict]:
     waveforms: list[dict] = []
+    normalized_leads_keep_8 = {_normalize_lead_id(lead) for lead in LEADS_KEEP_8}
+    normalized_leads_keep_12 = {_normalize_lead_id(lead) for lead in LEADS_KEEP_12}
     for idx, waveform in enumerate(root.findall(".//Waveform"), start=1):
         waveform_type = (waveform.findtext("WaveformType") or "").strip() or f"waveform_{idx}"
         leads = sorted(
             {
-                (lead_data.findtext("LeadID") or "").strip()
+                _canonical_lead_id(lead_data.findtext("LeadID") or "")
                 for lead_data in waveform.findall(".//LeadData")
                 if (lead_data.findtext("LeadID") or "").strip()
             }
         )
+        normalized_leads = {_normalize_lead_id(lead) for lead in leads}
         waveforms.append(
             {
                 "waveform_type": waveform_type,
                 "lead_count": len(leads),
                 "leads": leads,
-                "supports_8lead": set(LEADS_KEEP_8).issubset(set(leads)),
-                "supports_12lead": set(LEADS_KEEP_12).issubset(set(leads)),
+                "supports_8lead": normalized_leads_keep_8.issubset(normalized_leads),
+                "supports_12lead": normalized_leads_keep_12.issubset(normalized_leads),
             }
         )
     return waveforms
