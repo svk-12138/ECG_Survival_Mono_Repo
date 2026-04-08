@@ -154,6 +154,7 @@ $TaskMode = "prediction"
 # 导联类型：
 # 8lead  = I, II, V1-V6
 # 12lead = I, II, III, aVR, aVL, aVF, V1-V6
+# auto   = 若存在 training_inputs.json，则自动使用其中推荐值
 $LeadMode = "12lead"
 # ==================================================
 
@@ -222,6 +223,7 @@ $BestParams = "outputs\stroke_survival_thesis\best_params.json"
 # ==================================================
 
 $AutoTrainingInputs = Get-AutoTrainingInputs
+$AutoRecommendedLeadMode = ""
 if ($AutoTrainingInputs) {
     $AutoData = $AutoTrainingInputs.Data
     if (Test-IsPlaceholderPath $Manifest) {
@@ -233,13 +235,22 @@ if ($AutoTrainingInputs) {
     if (Test-IsPlaceholderPath $CsvDir) {
         $CsvDir = [string]$AutoData.csv_dir
     }
-    if ($LeadMode -eq "12lead" -and (Test-NonEmpty ([string]$AutoData.recommended_lead_mode))) {
-        $LeadMode = [string]$AutoData.recommended_lead_mode
+    if (Test-NonEmpty ([string]$AutoData.recommended_lead_mode)) {
+        $AutoRecommendedLeadMode = [string]$AutoData.recommended_lead_mode
+    }
+    if ($LeadMode -eq "auto") {
+        if (-not (Test-NonEmpty $AutoRecommendedLeadMode)) {
+            throw "[error] LeadMode=auto，但自动训练配置中没有 recommended_lead_mode"
+        }
+        $LeadMode = $AutoRecommendedLeadMode
     }
     if ($WaveformType -eq "Rhythm" -and (Test-NonEmpty ([string]$AutoData.waveform_type))) {
         $WaveformType = [string]$AutoData.waveform_type
     }
     Write-Host "[auto] 已加载训练输入配置: $($AutoTrainingInputs.Path)"
+    if ((Test-NonEmpty $AutoRecommendedLeadMode) -and ($LeadMode -ne $AutoRecommendedLeadMode)) {
+        Write-Host "[warn] 自动推荐导联模式为 $AutoRecommendedLeadMode，但当前脚本将按手动设置的 $LeadMode 训练。"
+    }
 }
 
 if (-not (Test-NonEmpty $Manifest)) {
@@ -258,8 +269,12 @@ if ($TaskMode -notin @("prediction", "classification")) {
     throw "[error] TaskMode 只能是 prediction 或 classification"
 }
 
+if ($LeadMode -eq "auto") {
+    throw "[error] LeadMode=auto 需要先生成 training_inputs.json，或手动改成 8lead / 12lead"
+}
+
 if ($LeadMode -notin @("8lead", "12lead")) {
-    throw "[error] LeadMode 只能是 8lead 或 12lead"
+    throw "[error] LeadMode 只能是 8lead、12lead 或 auto"
 }
 
 $ManifestResolved = Resolve-RepoPath $Manifest
@@ -361,6 +376,9 @@ Write-Host "  split_ratio=train:$TrainRatio val:$ValRatio test:$TestRatio"
 Write-Host "  cv_folds=$CVFolds"
 if ($AutoTrainingInputs) {
     Write-Host "  auto_training_inputs=$($AutoTrainingInputs.Path)"
+    if (Test-NonEmpty $AutoRecommendedLeadMode) {
+        Write-Host "  auto_recommended_lead_mode=$AutoRecommendedLeadMode"
+    }
 }
 Write-Host "[cmd] $PythonBin $($PythonPrefixArgs -join ' ') $($CommandArgs -join ' ')"
 

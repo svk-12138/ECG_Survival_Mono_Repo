@@ -29,7 +29,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import build_manifest_from_event_csv as manifest_builder
-from modules.survival_model.torch_survival.ecg_preprocessing import LEADS_KEEP_8, LEADS_KEEP_12
+from modules.survival_model.torch_survival.ecg_preprocessing import (
+    LEADS_KEEP_8,
+    LEADS_KEEP_12,
+    _decode_waveform_signal,
+)
 
 
 def _normalize_lead_id(lead_id: str) -> str:
@@ -82,19 +86,27 @@ def _parse_xml_root(xml_path: Path, encodings: list[str]) -> ET.Element:
     raise ValueError(f"Unable to parse XML {xml_path}: {last_error}")
 
 
-def _waveform_leads(root: ET.Element) -> list[dict]:
+def _waveform_leads(root: ET.Element, xml_path: Path) -> list[dict]:
     waveforms: list[dict] = []
     normalized_leads_keep_8 = {_normalize_lead_id(lead) for lead in LEADS_KEEP_8}
     normalized_leads_keep_12 = {_normalize_lead_id(lead) for lead in LEADS_KEEP_12}
     for idx, waveform in enumerate(root.findall(".//Waveform"), start=1):
         waveform_type = (waveform.findtext("WaveformType") or "").strip() or f"waveform_{idx}"
-        leads = sorted(
-            {
-                _canonical_lead_id(lead_data.findtext("LeadID") or "")
-                for lead_data in waveform.findall(".//LeadData")
-                if (lead_data.findtext("LeadID") or "").strip()
-            }
-        )
+        readable_leads: set[str] = set()
+        for lead_data in waveform.findall(".//LeadData"):
+            raw_lead_id = (lead_data.findtext("LeadID") or "").strip()
+            if not raw_lead_id:
+                continue
+            waveform_data = lead_data.findtext("WaveFormData") or ""
+            try:
+                signal = _decode_waveform_signal(waveform_data, xml_path, raw_lead_id)
+            except Exception:
+                continue
+            if signal.size == 0:
+                continue
+            readable_leads.add(_canonical_lead_id(raw_lead_id))
+
+        leads = sorted(readable_leads)
         normalized_leads = {_normalize_lead_id(lead) for lead in leads}
         waveforms.append(
             {
@@ -122,7 +134,7 @@ def build_lead_audit(rows: list[dict], xml_dir: Path, waveform_type: str, xml_en
             xml_path = (xml_dir / xml_path).resolve()
 
         root = _parse_xml_root(xml_path, xml_encodings)
-        waveform_rows = _waveform_leads(root)
+        waveform_rows = _waveform_leads(root, xml_path)
         requested = None
         best = None
         for item in waveform_rows:
@@ -130,6 +142,8 @@ def build_lead_audit(rows: list[dict], xml_dir: Path, waveform_type: str, xml_en
                 best = item
             if str(item["waveform_type"]).strip().lower() == requested_type_lower:
                 requested = item
+        effective = requested or best
+        effective_source = "requested" if requested is not None else ("best" if best is not None else "none")
 
         audit_rows.append(
             {
@@ -148,6 +162,12 @@ def build_lead_audit(rows: list[dict], xml_dir: Path, waveform_type: str, xml_en
                 "best_lead_count": int(best["lead_count"]) if best else 0,
                 "best_supports_8lead": bool(best["supports_8lead"]) if best else False,
                 "best_supports_12lead": bool(best["supports_12lead"]) if best else False,
+                "effective_waveform_source": effective_source,
+                "effective_waveform_type": effective["waveform_type"] if effective else "",
+                "effective_leads": ",".join(effective["leads"]) if effective else "",
+                "effective_lead_count": int(effective["lead_count"]) if effective else 0,
+                "effective_supports_8lead": bool(effective["supports_8lead"]) if effective else False,
+                "effective_supports_12lead": bool(effective["supports_12lead"]) if effective else False,
                 "all_waveforms_json": json.dumps(waveform_rows, ensure_ascii=False),
             }
         )
@@ -176,6 +196,8 @@ def write_text_report(path: Path, report: dict) -> None:
         f"matched_unique_xml={report['matched_unique_xml']}",
         f"requested_waveform_supports_8lead={report['requested_waveform_supports_8lead']}",
         f"requested_waveform_supports_12lead={report['requested_waveform_supports_12lead']}",
+        f"effective_waveform_supports_8lead={report['effective_waveform_supports_8lead']}",
+        f"effective_waveform_supports_12lead={report['effective_waveform_supports_12lead']}",
         f"recommended_lead_mode={report['recommended_lead_mode']}",
         "",
         "[doctor_advice]",
@@ -257,15 +279,28 @@ def main() -> int:
 
     requested_8_count = int(lead_audit_df["requested_supports_8lead"].sum()) if not lead_audit_df.empty else 0
     requested_12_count = int(lead_audit_df["requested_supports_12lead"].sum()) if not lead_audit_df.empty else 0
+    effective_8_count = int(lead_audit_df["effective_supports_8lead"].sum()) if not lead_audit_df.empty else 0
+    effective_12_count = int(lead_audit_df["effective_supports_12lead"].sum()) if not lead_audit_df.empty else 0
+    requested_found_count = int(lead_audit_df["requested_waveform_found"].sum()) if not lead_audit_df.empty else 0
     matched_unique_xml = int(len(lead_audit_df))
-    recommended_lead_mode = "12lead" if matched_unique_xml > 0 and requested_12_count == matched_unique_xml else "8lead"
+    recommended_lead_mode = "12lead" if matched_unique_xml > 0 and effective_12_count == matched_unique_xml else "8lead"
 
     status = "ready" if critical_issue_count == 0 else "failed"
-    doctor_advice = (
-        "可以开始训练。建议按 recommended_lead_mode 配置训练脚本。"
-        if status == "ready"
-        else "请先修正报告中的缺失 XML / 非法标签 / XML 解析问题，再重新运行本脚本。"
-    )
+    if status == "ready":
+        if 0 < requested_found_count < matched_unique_xml:
+            doctor_advice = (
+                "可以开始训练。部分 XML 没有找到请求的 WaveformType，系统已自动回退到导联数最多的波形做判断；"
+                "建议按 recommended_lead_mode 配置训练脚本。"
+            )
+        elif requested_found_count == 0 and matched_unique_xml > 0:
+            doctor_advice = (
+                "可以开始训练。当前 XML 未提供请求的 WaveformType，系统已自动回退到导联数最多的波形做判断；"
+                "建议按 recommended_lead_mode 配置训练脚本。"
+            )
+        else:
+            doctor_advice = "可以开始训练。建议按 recommended_lead_mode 配置训练脚本。"
+    else:
+        doctor_advice = "请先修正报告中的缺失 XML / 非法标签 / XML 解析问题，再重新运行本脚本。"
 
     report = {
         "status": status,
@@ -277,6 +312,9 @@ def main() -> int:
         "matched_unique_xml": matched_unique_xml,
         "requested_waveform_supports_8lead": requested_8_count,
         "requested_waveform_supports_12lead": requested_12_count,
+        "effective_waveform_supports_8lead": effective_8_count,
+        "effective_waveform_supports_12lead": effective_12_count,
+        "requested_waveform_found_count": requested_found_count,
         "recommended_lead_mode": recommended_lead_mode,
         "doctor_advice": doctor_advice,
         "manifest_path": str(manifest_path),
