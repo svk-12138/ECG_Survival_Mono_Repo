@@ -3,8 +3,9 @@
 卒中论文训练启动脚本（Windows PowerShell）。
 
 .DESCRIPTION
-1. 医生或学生优先修改 configs\train_stroke_thesis.env，而不是改本脚本。
-2. 修改完成后，优先运行 scripts\train_stroke_thesis.bat。
+1. 先复制 configs\train_stroke_thesis.env.example，生成 configs\train_stroke_thesis.env。
+2. 只修改 train_stroke_thesis.env，不要再改本脚本。
+3. 修改完成后，优先运行 scripts\train_stroke_thesis.bat。
 3. 如果习惯 PowerShell，也可运行：
    powershell -ExecutionPolicy Bypass -File scripts\train_stroke_thesis.ps1
 
@@ -112,7 +113,8 @@ function Get-TrainingEnvFile {
     if (Test-Path -LiteralPath $DefaultPath) {
         return $DefaultPath
     }
-    return $null
+    $ExamplePath = Join-Path $Root 'configs\train_stroke_thesis.env.example'
+    throw "[error] 未找到本地训练配置文件: $DefaultPath`n[hint] 请先复制 $ExamplePath 为 $DefaultPath，然后只修改 .env 文件，不要再改 .ps1 脚本。"
 }
 
 function Unquote-EnvValue {
@@ -200,8 +202,8 @@ function Get-AutoTrainingInputs {
 }
 
 # ==================== 默认参数 ====================
-# 推荐把这些参数写到 configs\train_stroke_thesis.env 中。
-# 本脚本里的值只是兜底默认值，避免 env 缺失时变量未定义。
+# 下面这些值只是参数模板，用来说明每个配置项的含义。
+# 实际训练时，必须由 configs\train_stroke_thesis.env 覆盖。
 # 如果仓库附近存在 processed\training_inputs.json，下面这些路径会自动优先读取；
 # 若要手动指定路径，也建议写进 env 文件，而不是改本脚本。
 $Manifest = "D:\your\path\stroke_manifest.json"
@@ -292,49 +294,47 @@ $BestParams = "outputs\stroke_survival_thesis\best_params.json"
 # ==================================================
 
 $TrainingEnvFile = Get-TrainingEnvFile
-if ($TrainingEnvFile) {
-    $EnvConfig = Read-TrainingEnvFile $TrainingEnvFile
-    if ($EnvConfig.ContainsKey('PYTHON_BIN')) { $env:PYTHON_BIN = [string]$EnvConfig['PYTHON_BIN'] }
-    if ($EnvConfig.ContainsKey('MANIFEST')) { $Manifest = [string]$EnvConfig['MANIFEST'] }
-    if ($EnvConfig.ContainsKey('XML_DIR')) { $XmlDir = [string]$EnvConfig['XML_DIR'] }
-    if ($EnvConfig.ContainsKey('CSV_DIR')) { $CsvDir = [string]$EnvConfig['CSV_DIR'] }
-    if ($EnvConfig.ContainsKey('TASK_MODE')) { $TaskMode = [string]$EnvConfig['TASK_MODE'] }
-    if ($EnvConfig.ContainsKey('LEAD_MODE')) { $LeadMode = [string]$EnvConfig['LEAD_MODE'] }
-    if ($EnvConfig.ContainsKey('N_INTERVALS')) { $NIntervals = [string]$EnvConfig['N_INTERVALS'] }
-    if ($EnvConfig.ContainsKey('MAX_TIME')) { $MaxTime = [string]$EnvConfig['MAX_TIME'] }
-    if ($EnvConfig.ContainsKey('PREDICTION_HORIZON')) { $PredictionHorizon = [string]$EnvConfig['PREDICTION_HORIZON'] }
-    if ($EnvConfig.ContainsKey('WAVEFORM_TYPE')) { $WaveformType = [string]$EnvConfig['WAVEFORM_TYPE'] }
-    if ($EnvConfig.ContainsKey('RESAMPLE_HZ')) { $ResampleHz = [string]$EnvConfig['RESAMPLE_HZ'] }
-    if ($EnvConfig.ContainsKey('APPLY_FILTERS')) { $ApplyFilters = Convert-EnvBool ([string]$EnvConfig['APPLY_FILTERS']) 'APPLY_FILTERS' }
-    if ($EnvConfig.ContainsKey('BANDPASS_LOW_HZ')) { $BandpassLowHz = [string]$EnvConfig['BANDPASS_LOW_HZ'] }
-    if ($EnvConfig.ContainsKey('BANDPASS_HIGH_HZ')) { $BandpassHighHz = [string]$EnvConfig['BANDPASS_HIGH_HZ'] }
-    if ($EnvConfig.ContainsKey('NOTCH_HZ')) { $NotchHz = [string]$EnvConfig['NOTCH_HZ'] }
-    if ($EnvConfig.ContainsKey('NOTCH_Q')) { $NotchQ = [string]$EnvConfig['NOTCH_Q'] }
-    if ($EnvConfig.ContainsKey('TARGET_LEN')) { $TargetLen = [string]$EnvConfig['TARGET_LEN'] }
-    if ($EnvConfig.ContainsKey('BATCH')) { $Batch = [string]$EnvConfig['BATCH'] }
-    if ($EnvConfig.ContainsKey('EPOCHS')) { $Epochs = [string]$EnvConfig['EPOCHS'] }
-    if ($EnvConfig.ContainsKey('LR')) { $LR = [string]$EnvConfig['LR'] }
-    if ($EnvConfig.ContainsKey('DROPOUT')) { $Dropout = [string]$EnvConfig['DROPOUT'] }
-    if ($EnvConfig.ContainsKey('WEIGHT_DECAY')) { $WeightDecay = [string]$EnvConfig['WEIGHT_DECAY'] }
-    if ($EnvConfig.ContainsKey('NUM_WORKERS')) { $NumWorkers = [string]$EnvConfig['NUM_WORKERS'] }
-    if ($EnvConfig.ContainsKey('TRAIN_RATIO')) { $TrainRatio = [string]$EnvConfig['TRAIN_RATIO'] }
-    if ($EnvConfig.ContainsKey('VAL_RATIO')) { $ValRatio = [string]$EnvConfig['VAL_RATIO'] }
-    if ($EnvConfig.ContainsKey('TEST_RATIO')) { $TestRatio = [string]$EnvConfig['TEST_RATIO'] }
-    if ($EnvConfig.ContainsKey('CV_FOLDS')) { $CVFolds = [string]$EnvConfig['CV_FOLDS'] }
-    if ($EnvConfig.ContainsKey('CV_SEED')) { $CVSeed = [string]$EnvConfig['CV_SEED'] }
-    if ($EnvConfig.ContainsKey('EVAL_THRESHOLD')) { $EvalThreshold = [string]$EnvConfig['EVAL_THRESHOLD'] }
-    if ($EnvConfig.ContainsKey('EARLY_STOP_METRIC')) { $EarlyStopMetric = [string]$EnvConfig['EARLY_STOP_METRIC'] }
-    if ($EnvConfig.ContainsKey('EARLY_STOP_PATIENCE')) { $EarlyStopPatience = [string]$EnvConfig['EARLY_STOP_PATIENCE'] }
-    if ($EnvConfig.ContainsKey('EARLY_STOP_MIN_DELTA')) { $EarlyStopMinDelta = [string]$EnvConfig['EARLY_STOP_MIN_DELTA'] }
-    if ($EnvConfig.ContainsKey('POS_WEIGHT_MULT')) { $PosWeightMult = [string]$EnvConfig['POS_WEIGHT_MULT'] }
-    if ($EnvConfig.ContainsKey('LOG_DIR')) { $LogDir = [string]$EnvConfig['LOG_DIR'] }
-    if ($EnvConfig.ContainsKey('DEVICE')) { $Device = [string]$EnvConfig['DEVICE'] }
-    if ($EnvConfig.ContainsKey('USE_DATA_PARALLEL')) { $UseDataParallel = Convert-EnvBool ([string]$EnvConfig['USE_DATA_PARALLEL']) 'USE_DATA_PARALLEL' }
-    if ($EnvConfig.ContainsKey('DEVICE_IDS')) { $DeviceIds = [string]$EnvConfig['DEVICE_IDS'] }
-    if ($EnvConfig.ContainsKey('USE_BEST_PARAMS')) { $UseBestParams = Convert-EnvBool ([string]$EnvConfig['USE_BEST_PARAMS']) 'USE_BEST_PARAMS' }
-    if ($EnvConfig.ContainsKey('BEST_PARAMS')) { $BestParams = [string]$EnvConfig['BEST_PARAMS'] }
-    Write-Host "[env] 已加载本地配置: $TrainingEnvFile"
-}
+$EnvConfig = Read-TrainingEnvFile $TrainingEnvFile
+if ($EnvConfig.ContainsKey('PYTHON_BIN')) { $env:PYTHON_BIN = [string]$EnvConfig['PYTHON_BIN'] }
+if ($EnvConfig.ContainsKey('MANIFEST')) { $Manifest = [string]$EnvConfig['MANIFEST'] }
+if ($EnvConfig.ContainsKey('XML_DIR')) { $XmlDir = [string]$EnvConfig['XML_DIR'] }
+if ($EnvConfig.ContainsKey('CSV_DIR')) { $CsvDir = [string]$EnvConfig['CSV_DIR'] }
+if ($EnvConfig.ContainsKey('TASK_MODE')) { $TaskMode = [string]$EnvConfig['TASK_MODE'] }
+if ($EnvConfig.ContainsKey('LEAD_MODE')) { $LeadMode = [string]$EnvConfig['LEAD_MODE'] }
+if ($EnvConfig.ContainsKey('N_INTERVALS')) { $NIntervals = [string]$EnvConfig['N_INTERVALS'] }
+if ($EnvConfig.ContainsKey('MAX_TIME')) { $MaxTime = [string]$EnvConfig['MAX_TIME'] }
+if ($EnvConfig.ContainsKey('PREDICTION_HORIZON')) { $PredictionHorizon = [string]$EnvConfig['PREDICTION_HORIZON'] }
+if ($EnvConfig.ContainsKey('WAVEFORM_TYPE')) { $WaveformType = [string]$EnvConfig['WAVEFORM_TYPE'] }
+if ($EnvConfig.ContainsKey('RESAMPLE_HZ')) { $ResampleHz = [string]$EnvConfig['RESAMPLE_HZ'] }
+if ($EnvConfig.ContainsKey('APPLY_FILTERS')) { $ApplyFilters = Convert-EnvBool ([string]$EnvConfig['APPLY_FILTERS']) 'APPLY_FILTERS' }
+if ($EnvConfig.ContainsKey('BANDPASS_LOW_HZ')) { $BandpassLowHz = [string]$EnvConfig['BANDPASS_LOW_HZ'] }
+if ($EnvConfig.ContainsKey('BANDPASS_HIGH_HZ')) { $BandpassHighHz = [string]$EnvConfig['BANDPASS_HIGH_HZ'] }
+if ($EnvConfig.ContainsKey('NOTCH_HZ')) { $NotchHz = [string]$EnvConfig['NOTCH_HZ'] }
+if ($EnvConfig.ContainsKey('NOTCH_Q')) { $NotchQ = [string]$EnvConfig['NOTCH_Q'] }
+if ($EnvConfig.ContainsKey('TARGET_LEN')) { $TargetLen = [string]$EnvConfig['TARGET_LEN'] }
+if ($EnvConfig.ContainsKey('BATCH')) { $Batch = [string]$EnvConfig['BATCH'] }
+if ($EnvConfig.ContainsKey('EPOCHS')) { $Epochs = [string]$EnvConfig['EPOCHS'] }
+if ($EnvConfig.ContainsKey('LR')) { $LR = [string]$EnvConfig['LR'] }
+if ($EnvConfig.ContainsKey('DROPOUT')) { $Dropout = [string]$EnvConfig['DROPOUT'] }
+if ($EnvConfig.ContainsKey('WEIGHT_DECAY')) { $WeightDecay = [string]$EnvConfig['WEIGHT_DECAY'] }
+if ($EnvConfig.ContainsKey('NUM_WORKERS')) { $NumWorkers = [string]$EnvConfig['NUM_WORKERS'] }
+if ($EnvConfig.ContainsKey('TRAIN_RATIO')) { $TrainRatio = [string]$EnvConfig['TRAIN_RATIO'] }
+if ($EnvConfig.ContainsKey('VAL_RATIO')) { $ValRatio = [string]$EnvConfig['VAL_RATIO'] }
+if ($EnvConfig.ContainsKey('TEST_RATIO')) { $TestRatio = [string]$EnvConfig['TEST_RATIO'] }
+if ($EnvConfig.ContainsKey('CV_FOLDS')) { $CVFolds = [string]$EnvConfig['CV_FOLDS'] }
+if ($EnvConfig.ContainsKey('CV_SEED')) { $CVSeed = [string]$EnvConfig['CV_SEED'] }
+if ($EnvConfig.ContainsKey('EVAL_THRESHOLD')) { $EvalThreshold = [string]$EnvConfig['EVAL_THRESHOLD'] }
+if ($EnvConfig.ContainsKey('EARLY_STOP_METRIC')) { $EarlyStopMetric = [string]$EnvConfig['EARLY_STOP_METRIC'] }
+if ($EnvConfig.ContainsKey('EARLY_STOP_PATIENCE')) { $EarlyStopPatience = [string]$EnvConfig['EARLY_STOP_PATIENCE'] }
+if ($EnvConfig.ContainsKey('EARLY_STOP_MIN_DELTA')) { $EarlyStopMinDelta = [string]$EnvConfig['EARLY_STOP_MIN_DELTA'] }
+if ($EnvConfig.ContainsKey('POS_WEIGHT_MULT')) { $PosWeightMult = [string]$EnvConfig['POS_WEIGHT_MULT'] }
+if ($EnvConfig.ContainsKey('LOG_DIR')) { $LogDir = [string]$EnvConfig['LOG_DIR'] }
+if ($EnvConfig.ContainsKey('DEVICE')) { $Device = [string]$EnvConfig['DEVICE'] }
+if ($EnvConfig.ContainsKey('USE_DATA_PARALLEL')) { $UseDataParallel = Convert-EnvBool ([string]$EnvConfig['USE_DATA_PARALLEL']) 'USE_DATA_PARALLEL' }
+if ($EnvConfig.ContainsKey('DEVICE_IDS')) { $DeviceIds = [string]$EnvConfig['DEVICE_IDS'] }
+if ($EnvConfig.ContainsKey('USE_BEST_PARAMS')) { $UseBestParams = Convert-EnvBool ([string]$EnvConfig['USE_BEST_PARAMS']) 'USE_BEST_PARAMS' }
+if ($EnvConfig.ContainsKey('BEST_PARAMS')) { $BestParams = [string]$EnvConfig['BEST_PARAMS'] }
+Write-Host "[env] 已加载本地配置: $TrainingEnvFile"
 
 $PythonSpec = Resolve-PythonCommand
 $PythonBin = $PythonSpec.Command

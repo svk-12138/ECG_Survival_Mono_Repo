@@ -2,8 +2,10 @@
 # 卒中论文训练启动脚本（Linux / macOS / WSL）。
 #
 # 用法：
-#   1. 优先修改 configs/train_stroke_thesis.env
-#   2. 再执行：bash scripts/train_stroke_thesis.sh
+#   1. 先复制 configs/train_stroke_thesis.env.example
+#      生成为 configs/train_stroke_thesis.env
+#   2. 只修改 configs/train_stroke_thesis.env
+#   3. 再执行：bash scripts/train_stroke_thesis.sh
 #
 # 说明：
 # - 如果医生在 Win11 上使用，优先改 scripts/train_stroke_thesis.ps1
@@ -49,12 +51,16 @@ resolve_training_env_file() {
     printf '%s' "$default_env"
     return
   fi
-  printf '%s' ""
+
+  local example_env="$ROOT/configs/train_stroke_thesis.env.example"
+  echo "[error] 未找到本地训练配置文件: $default_env"
+  echo "[hint] 请先复制 $example_env 为 $default_env，然后只修改 .env 文件，不要再改 .sh 或 .ps1 脚本。"
+  exit 1
 }
 
 # ==================== 默认参数 ====================
-# 推荐把这些参数写到 configs/train_stroke_thesis.env 中。
-# 本脚本里的值只是兜底默认值，避免 env 缺失时变量未定义。
+# 下面这些值只是参数模板，用来说明每个配置项的含义。
+# 实际训练时，必须由 configs/train_stroke_thesis.env 覆盖。
 # 标签文件：必须包含 patient_id / time / event
 MANIFEST="/your/path/stroke_manifest.json"
 
@@ -143,13 +149,11 @@ BEST_PARAMS="outputs/stroke_survival_thesis/best_params.json"
 # ==================================================
 
 TRAINING_ENV_FILE="$(resolve_training_env_file)"
-if [[ -n "$TRAINING_ENV_FILE" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$TRAINING_ENV_FILE"
-  set +a
-  echo "[env] 已加载本地配置: $TRAINING_ENV_FILE"
-fi
+set -a
+# shellcheck disable=SC1090
+source "$TRAINING_ENV_FILE"
+set +a
+echo "[env] 已加载本地配置: $TRAINING_ENV_FILE"
 
 if [[ -z "$MANIFEST" ]]; then
   echo "[error] MANIFEST 不能为空"
