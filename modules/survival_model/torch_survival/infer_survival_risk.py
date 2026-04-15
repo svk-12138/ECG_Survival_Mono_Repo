@@ -209,9 +209,77 @@ def _resolve_task_mode(requested: str, output_dim: int) -> str:
     return requested
 
 
+def _resolve_checkpoint_from_log_dir(log_dir: Path) -> Path:
+    log_dir = log_dir.resolve()
+    summary_path = log_dir / "run_summary.json"
+    candidates: list[Path] = []
+
+    if summary_path.exists():
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except Exception:
+            summary = {}
+        for key in (
+            "preferred_checkpoint",
+            "legacy_checkpoint",
+            "archived_best_checkpoint",
+            "latest_checkpoint",
+            "archived_last_checkpoint",
+        ):
+            raw = summary.get(key)
+            if raw:
+                candidates.append(Path(raw))
+
+    candidates.extend(
+        [
+            log_dir / "model_best.pt",
+            log_dir / "model_final.pt",
+            log_dir / "model_last.pt",
+        ]
+    )
+
+    checkpoint_dir = log_dir / "checkpoints"
+    if checkpoint_dir.exists():
+        candidates.extend(sorted(checkpoint_dir.glob("model_best_epoch_*.pt"), reverse=True))
+        candidates.extend(sorted(checkpoint_dir.glob("model_last_epoch_*.pt"), reverse=True))
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except Exception:
+            resolved = candidate
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        if resolved.exists():
+            return resolved
+
+    raise FileNotFoundError(
+        f"在 log_dir 中未找到可用 checkpoint: {log_dir} | "
+        "已尝试 model_best.pt / model_final.pt / model_last.pt / checkpoints/*.pt"
+    )
+
+
+def _resolve_checkpoint_path(checkpoint: str | None, log_dir: str | None) -> Path:
+    if checkpoint:
+        checkpoint_path = Path(checkpoint)
+        if checkpoint_path.is_dir() and not log_dir:
+            return _resolve_checkpoint_from_log_dir(checkpoint_path)
+        resolved = checkpoint_path.resolve()
+        if not resolved.exists():
+            raise FileNotFoundError(f"checkpoint 不存在: {resolved}")
+        return resolved
+    if log_dir:
+        return _resolve_checkpoint_from_log_dir(Path(log_dir))
+    raise ValueError("请提供 --checkpoint，或提供 --log-dir 让脚本自动选择最佳模型")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="导出 ECG 风险分数")
-    parser.add_argument("--checkpoint", required=True, help="模型权重路径（model_final.pt）")
+    parser.add_argument("--checkpoint", default=None, help="模型权重路径；若不填，可改用 --log-dir 自动选择最佳模型")
+    parser.add_argument("--log-dir", default=None, help="训练输出目录；未显式传 --checkpoint 时，自动优先选择 model_best.pt")
     parser.add_argument("--manifest", required=True, help="JSON manifest 路径")
     parser.add_argument("--xml-dir", default=None, help="XML 目录")
     parser.add_argument("--csv-dir", default=None, help="CSV 目录（可选，优先生效）")
@@ -251,7 +319,9 @@ def main() -> None:
         dataset = ECGXMLInferDataset(Path(args.manifest), Path(args.xml_dir), preprocessing)
     loader = DataLoader(dataset, batch_size=args.batch, shuffle=False)
 
-    state = torch.load(args.checkpoint, map_location="cpu")
+    checkpoint_path = _resolve_checkpoint_path(args.checkpoint, args.log_dir)
+    print(f"[infer] using checkpoint: {checkpoint_path}")
+    state = torch.load(checkpoint_path, map_location="cpu")
     if isinstance(state, dict) and "state_dict" in state:
         state = state["state_dict"]
     if not isinstance(state, dict):

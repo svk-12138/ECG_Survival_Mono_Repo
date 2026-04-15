@@ -25,6 +25,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List, Literal, Tuple
 from dataclasses import dataclass
+from datetime import datetime
 
 import numpy as np
 import torch
@@ -217,6 +218,123 @@ def _make_dataloader(
         generator=generator,
     )
 
+
+def _copy_model_state_to_cpu(model) -> dict[str, torch.Tensor]:
+    save_model = model.module if isinstance(model, torch.nn.DataParallel) else model
+    return {key: value.detach().cpu().clone() for key, value in save_model.state_dict().items()}
+
+
+def _load_model_state(model, state_dict: dict[str, torch.Tensor]) -> None:
+    target_model = model.module if isinstance(model, torch.nn.DataParallel) else model
+    target_model.load_state_dict(state_dict)
+
+
+def _metric_name_slug(metric: str) -> str:
+    text = re.sub(r"[^0-9A-Za-z]+", "_", str(metric).strip().lower())
+    return text.strip("_") or "metric"
+
+
+def _metric_value_slug(value: float) -> str:
+    if value is None or not np.isfinite(value):
+        return "nan"
+    return f"{float(value):.4f}".replace("-", "m").replace(".", "p")
+
+
+def _json_safe_metrics(metrics: dict | None) -> dict:
+    if not metrics:
+        return {}
+    result: dict[str, float | None] = {}
+    for key, value in metrics.items():
+        if isinstance(value, (np.floating, float)):
+            numeric = float(value)
+            result[key] = numeric if np.isfinite(numeric) else None
+        else:
+            result[key] = value
+    return result
+
+
+def _save_training_artifacts(
+    *,
+    log_dir: Path,
+    best_state: dict[str, torch.Tensor],
+    last_state: dict[str, torch.Tensor] | None,
+    best_epoch: int | None,
+    last_epoch: int,
+    selection_metric: str,
+    selection_score: float,
+    train_metrics: dict | None,
+    val_metrics: dict | None,
+    best_threshold_info: dict | None,
+) -> dict[str, str]:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_dir = log_dir / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    now = datetime.now()
+    timestamp_tag = now.strftime("%Y%m%d_%H%M%S")
+    timestamp_iso = now.isoformat(timespec="seconds")
+    metric_tag = _metric_name_slug(selection_metric)
+    score_tag = _metric_value_slug(selection_score)
+    best_epoch_text = f"{int(best_epoch):03d}" if best_epoch is not None else "na"
+    last_epoch_text = f"{int(last_epoch):03d}"
+
+    model_best_path = log_dir / "model_best.pt"
+    model_final_path = log_dir / "model_final.pt"
+    model_last_path = log_dir / "model_last.pt"
+    archived_best_path = checkpoint_dir / (
+        f"model_best_epoch_{best_epoch_text}_{metric_tag}_{score_tag}_{timestamp_tag}.pt"
+    )
+    archived_last_path = checkpoint_dir / f"model_last_epoch_{last_epoch_text}_{timestamp_tag}.pt"
+
+    torch.save(best_state, model_best_path)
+    torch.save(best_state, model_final_path)
+    torch.save(best_state, archived_best_path)
+
+    effective_last_state = last_state if last_state is not None else best_state
+    torch.save(effective_last_state, model_last_path)
+    torch.save(effective_last_state, archived_last_path)
+
+    if best_threshold_info is not None:
+        thresh_path = log_dir / "best_threshold.json"
+        thresh_path.write_text(
+            json.dumps(best_threshold_info, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        print(f"[save] best threshold saved to {thresh_path}")
+
+    summary = {
+        "saved_at": timestamp_iso,
+        "saved_at_tag": timestamp_tag,
+        "selection_metric": selection_metric,
+        "selection_score": float(selection_score) if np.isfinite(selection_score) else None,
+        "best_epoch": int(best_epoch) if best_epoch is not None else None,
+        "last_epoch": int(last_epoch),
+        "preferred_checkpoint": str(model_best_path),
+        "legacy_checkpoint": str(model_final_path),
+        "latest_checkpoint": str(model_last_path),
+        "archived_best_checkpoint": str(archived_best_path),
+        "archived_last_checkpoint": str(archived_last_path),
+        "train_metrics": _json_safe_metrics(train_metrics),
+        "val_metrics": _json_safe_metrics(val_metrics),
+    }
+    summary_path = log_dir / "run_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"[save] run summary saved to {summary_path}")
+
+    print(f"[save] best checkpoint saved to {model_best_path}")
+    print(f"[save] legacy final checkpoint saved to {model_final_path}")
+    print(f"[save] last checkpoint saved to {model_last_path}")
+
+    return {
+        "model_best": str(model_best_path),
+        "model_final": str(model_final_path),
+        "model_last": str(model_last_path),
+        "archived_best": str(archived_best_path),
+        "archived_last": str(archived_last_path),
+        "run_summary": str(summary_path),
+    }
+
+
 def _load_manifest(json_path: Path) -> List[dict]:
     """读取 manifest 文件，返回所有样本条目的列表。"""
 
@@ -351,9 +469,14 @@ def _find_best_threshold(events_arr: np.ndarray, scores_arr: np.ndarray) -> dict
                     "specificity": float("nan")}
 
 
-def _get_early_stop_score(val_metrics: dict, metric: str, task_mode: str) -> float:
+def _resolve_selection_metric_name(metric: str, task_mode: str) -> str:
     if metric == "auto":
-        metric = "val_c_index" if task_mode == "prediction" else "val_pr_auc"
+        return "val_c_index" if task_mode == "prediction" else "val_pr_auc"
+    return metric
+
+
+def _get_early_stop_score(val_metrics: dict, metric: str, task_mode: str) -> float:
+    metric = _resolve_selection_metric_name(metric, task_mode)
     if metric == "val_loss":
         loss = val_metrics.get("loss", float("nan"))
         return -float(loss) if loss is not None and not np.isnan(loss) else float("-inf")
@@ -1060,7 +1183,7 @@ def _train_model(
     device_ids: list[int] | None = None,
     pos_weight: float | None = None,
 ):
-    """训练单个划分（train/val），返回模型与最后一轮指标。"""
+    """训练单个划分（train/val），返回模型、最优指标与保存产物。"""
 
     fold_prefix = f"[Fold {fold_label}] " if fold_label else ""
     breaks = SurvivalBreaks.from_uniform(cfg.max_time, cfg.n_intervals)
@@ -1096,7 +1219,10 @@ def _train_model(
     metrics_history: List[dict] = []
     model.train()
 
+    selection_metric_name = _resolve_selection_metric_name(cfg.early_stop_metric, cfg.task_mode)
     best_threshold_info: dict | None = None
+    best_model_state: dict[str, torch.Tensor] | None = None
+    best_model_epoch: int | None = None
     best_score = float("-inf")
     no_improve = 0
 
@@ -1121,7 +1247,9 @@ def _train_model(
             prediction_horizon=cfg.prediction_horizon,
             threshold=cfg.eval_threshold,
         )
-        selection_score = val_metrics["c_index"] if cfg.task_mode == "prediction" else val_metrics["best_f1"]
+        best_score = _get_early_stop_score(val_metrics, cfg.early_stop_metric, cfg.task_mode)
+        best_model_state = _copy_model_state_to_cpu(model)
+        best_model_epoch = 0
         if val_metrics:
             best_threshold_info = {
                 "epoch": 0,
@@ -1136,7 +1264,8 @@ def _train_model(
                 "val_pr_auc": val_metrics["pr_auc"],
                 "val_auc": val_metrics["auc"],
                 "val_loss": val_metrics["loss"],
-                "selection_score": selection_score,
+                "selection_metric": selection_metric_name,
+                "selection_score": best_score,
             }
     else:
         train_metrics = None
@@ -1189,8 +1318,12 @@ def _train_model(
             )
 
             if val_metrics:
-                selection_score = val_metrics["c_index"] if cfg.task_mode == "prediction" else val_metrics["best_f1"]
-                if best_threshold_info is None or selection_score > best_threshold_info.get("selection_score", float("-inf")):
+                current_score = _get_early_stop_score(val_metrics, cfg.early_stop_metric, cfg.task_mode)
+                if current_score > best_score + cfg.early_stop_min_delta:
+                    best_score = current_score
+                    no_improve = 0
+                    best_model_state = _copy_model_state_to_cpu(model)
+                    best_model_epoch = epoch
                     best_threshold_info = {
                         "epoch": epoch,
                         "best_threshold": val_metrics["best_threshold"],
@@ -1204,13 +1337,9 @@ def _train_model(
                         "val_pr_auc": val_metrics["pr_auc"],
                         "val_auc": val_metrics["auc"],
                         "val_loss": val_metrics["loss"],
-                        "selection_score": selection_score,
+                        "selection_metric": selection_metric_name,
+                        "selection_score": current_score,
                     }
-
-                current_score = _get_early_stop_score(val_metrics, cfg.early_stop_metric, cfg.task_mode)
-                if current_score > best_score + cfg.early_stop_min_delta:
-                    best_score = current_score
-                    no_improve = 0
                 else:
                     no_improve += 1
 
@@ -1279,20 +1408,57 @@ def _train_model(
     if metrics_history:
         _log_and_plot(metrics_history, log_dir)
 
-    log_dir.mkdir(parents=True, exist_ok=True)
-    ckpt_path = log_dir / "model_final.pt"
-    save_model = model.module if isinstance(model, torch.nn.DataParallel) else model
-    torch.save(save_model.state_dict(), ckpt_path)
-    print(f"{fold_prefix}[save] model saved to {ckpt_path}")
-    if best_threshold_info is not None:
-        thresh_path = log_dir / "best_threshold.json"
-        thresh_path.write_text(
-            json.dumps(best_threshold_info, indent=2, ensure_ascii=False),
-            encoding="utf-8",
+    last_model_state = _copy_model_state_to_cpu(model)
+    last_epoch = max(len(metrics_history), 0)
+    if best_model_state is not None:
+        _load_model_state(model, best_model_state)
+        if best_model_epoch is not None:
+            print(
+                f"{fold_prefix}[restore] best validation model restored "
+                f"(epoch={best_model_epoch}, metric={selection_metric_name}, score={best_score:.4f})"
+            )
+        train_metrics = evaluate(
+            model,
+            train_eval_loader,
+            criterion,
+            device,
+            task_mode=cfg.task_mode,
+            breaks=breaks,
+            prediction_horizon=cfg.prediction_horizon,
+            threshold=cfg.eval_threshold,
         )
-        print(f"{fold_prefix}[save] best threshold saved to {thresh_path}")
+        val_metrics = evaluate(
+            model,
+            val_loader,
+            criterion,
+            device,
+            task_mode=cfg.task_mode,
+            breaks=breaks,
+            prediction_horizon=cfg.prediction_horizon,
+            threshold=cfg.eval_threshold,
+        )
 
-    return {"model": model, "train": train_metrics, "val": val_metrics, "history": metrics_history}
+    save_state = best_model_state if best_model_state is not None else _copy_model_state_to_cpu(model)
+    artifacts = _save_training_artifacts(
+        log_dir=log_dir,
+        best_state=save_state,
+        last_state=last_model_state,
+        best_epoch=best_model_epoch,
+        last_epoch=last_epoch,
+        selection_metric=selection_metric_name,
+        selection_score=best_score,
+        train_metrics=train_metrics,
+        val_metrics=val_metrics,
+        best_threshold_info=best_threshold_info,
+    )
+
+    return {
+        "model": model,
+        "train": train_metrics,
+        "val": val_metrics,
+        "history": metrics_history,
+        "artifacts": artifacts,
+    }
 
 def _log_and_plot(history: List[dict], log_dir: Path):
     """将历史指标写入 CSV 并绘制训练曲线。"""
@@ -1432,6 +1598,7 @@ def _run_cross_validation(
                 "train": result["train"],
                 "val": result["val"],
                 "log_dir": str(fold_dir),
+                "artifacts": result.get("artifacts", {}),
             }
         )
 
@@ -1462,24 +1629,27 @@ def _run_cross_validation(
     best_score = -np.inf
     for row in fold_results:
         val = row.get("val") or {}
-        preferred = val.get("c_index") if cfg.task_mode == "prediction" else val.get("auc")
-        loss = val.get("loss")
-        score = -np.inf
-        if preferred is not None and not np.isnan(preferred):
-            score = float(preferred)
-        elif loss is not None and not np.isnan(loss):
-            score = -float(loss)
+        score = _get_early_stop_score(val, cfg.early_stop_metric, cfg.task_mode)
         if score > best_score:
             best_score = score
             best_fold = row
 
     best_checkpoint = None
+    best_checkpoint_alias = None
+    best_run_summary = None
     if best_fold:
-        ckpt_candidate = Path(best_fold["log_dir"]) / "model_final.pt"
+        artifacts = best_fold.get("artifacts") or {}
+        ckpt_candidate = Path(artifacts.get("model_best") or (Path(best_fold["log_dir"]) / "model_final.pt"))
         if ckpt_candidate.exists():
             best_checkpoint = cfg.log_dir / "model_final.pt"
+            best_checkpoint_alias = cfg.log_dir / "model_best.pt"
             shutil.copy2(ckpt_candidate, best_checkpoint)
+            shutil.copy2(ckpt_candidate, best_checkpoint_alias)
             print(f"[CV] best fold -> {best_fold['fold']} (checkpoint copied to {best_checkpoint})")
+        summary_candidate = Path(artifacts["run_summary"]) if artifacts.get("run_summary") else None
+        if summary_candidate and summary_candidate.exists():
+            best_run_summary = cfg.log_dir / "run_summary.json"
+            shutil.copy2(summary_candidate, best_run_summary)
 
     summary = {
         "cv_folds": cfg.cv_folds,
@@ -1489,6 +1659,8 @@ def _run_cross_validation(
         "fold_results": fold_results,
         "best_fold": best_fold["fold"] if best_fold else None,
         "best_checkpoint": str(best_checkpoint) if best_checkpoint else None,
+        "preferred_checkpoint": str(best_checkpoint_alias) if best_checkpoint_alias else None,
+        "best_run_summary": str(best_run_summary) if best_run_summary else None,
     }
     summary_path = cfg.log_dir / "cv_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
