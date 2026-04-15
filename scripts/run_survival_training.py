@@ -116,6 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device-ids", type=str, default=None, help="Comma separated GPU ids, e.g. 0,1,2,3.")
     parser.add_argument("--cv-folds", type=int, default=None, help="K-fold cross validation folds (1=disable).")
     parser.add_argument("--cv-seed", type=int, default=None, help="Random seed for CV splits.")
+    parser.add_argument("--train-seed", type=int, default=None, help="Random seed for model init / shuffle / deterministic training.")
     parser.add_argument("--train-ratio", type=float, default=None, help="Holdout train split ratio, used when cv_folds=1.")
     parser.add_argument("--val-ratio", type=float, default=None, help="Holdout validation split ratio, used when cv_folds=1.")
     parser.add_argument("--test-ratio", type=float, default=None, help="Holdout test split ratio, can be 0 when cv_folds=1.")
@@ -188,7 +189,7 @@ def main() -> None:
         "lr", "num_workers", "dropout", "weight_decay", "sched_tmax",
         "eval_threshold", "pos_weight_mult", "early_stop_patience", "early_stop_min_delta",
         "early_stop_metric", "log_dir", "device", "use_data_parallel", "device_ids",
-        "inspect", "cv_folds", "cv_seed", "train_ratio", "val_ratio", "test_ratio"
+        "inspect", "cv_folds", "cv_seed", "train_seed", "train_ratio", "val_ratio", "test_ratio"
     )}
     combined = {**yaml_overrides, **{k: v for k, v in cli_overrides.items() if v is not None}}
     cfg = apply_overrides(cfg, combined)

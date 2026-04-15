@@ -25,6 +25,7 @@ $Utf8Encoding = New-Object System.Text.UTF8Encoding($false)
 $OutputEncoding = $Utf8Encoding
 $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
+$env:CUBLAS_WORKSPACE_CONFIG = ":4096:8"
 
 $Root = Split-Path -Parent $PSScriptRoot
 
@@ -271,6 +272,7 @@ $TestRatio = 0.0
 # - 大于 1 表示启用 K 折交叉验证，此时比例参数会被忽略
 $CVFolds = 1
 $CVSeed = 42
+$TrainSeed = 42
 
 # 早停与评估
 $EvalThreshold = 0.5
@@ -323,6 +325,7 @@ if ($EnvConfig.ContainsKey('VAL_RATIO')) { $ValRatio = [string]$EnvConfig['VAL_R
 if ($EnvConfig.ContainsKey('TEST_RATIO')) { $TestRatio = [string]$EnvConfig['TEST_RATIO'] }
 if ($EnvConfig.ContainsKey('CV_FOLDS')) { $CVFolds = [string]$EnvConfig['CV_FOLDS'] }
 if ($EnvConfig.ContainsKey('CV_SEED')) { $CVSeed = [string]$EnvConfig['CV_SEED'] }
+if ($EnvConfig.ContainsKey('TRAIN_SEED')) { $TrainSeed = [string]$EnvConfig['TRAIN_SEED'] }
 if ($EnvConfig.ContainsKey('EVAL_THRESHOLD')) { $EvalThreshold = [string]$EnvConfig['EVAL_THRESHOLD'] }
 if ($EnvConfig.ContainsKey('EARLY_STOP_METRIC')) { $EarlyStopMetric = [string]$EnvConfig['EARLY_STOP_METRIC'] }
 if ($EnvConfig.ContainsKey('EARLY_STOP_PATIENCE')) { $EarlyStopPatience = [string]$EnvConfig['EARLY_STOP_PATIENCE'] }
@@ -339,6 +342,7 @@ Write-Host "[env] 已加载本地配置: $TrainingEnvFile"
 $PythonSpec = Resolve-PythonCommand
 $PythonBin = $PythonSpec.Command
 $PythonPrefixArgs = $PythonSpec.PrefixArgs
+$env:PYTHONHASHSEED = $TrainSeed.ToString()
 
 $AutoTrainingInputs = Get-AutoTrainingInputs
 $AutoRecommendedLeadMode = ""
@@ -437,6 +441,7 @@ $CommandArgs += @('--weight-decay', $WeightDecay.ToString())
 $CommandArgs += @('--num-workers', $NumWorkers.ToString())
 $CommandArgs += @('--cv-folds', $CVFolds.ToString())
 $CommandArgs += @('--cv-seed', $CVSeed.ToString())
+$CommandArgs += @('--train-seed', $TrainSeed.ToString())
 $CommandArgs += @('--train-ratio', $TrainRatio.ToString())
 $CommandArgs += @('--val-ratio', $ValRatio.ToString())
 $CommandArgs += @('--test-ratio', $TestRatio.ToString())
@@ -492,6 +497,7 @@ Write-Host "  log_dir=$LogDirResolved"
 Write-Host "  prediction_horizon=$PredictionHorizon"
 Write-Host "  split_ratio=train:$TrainRatio val:$ValRatio test:$TestRatio"
 Write-Host "  cv_folds=$CVFolds"
+Write-Host "  train_seed=$TrainSeed"
 if ($AutoTrainingInputs) {
     Write-Host "  auto_training_inputs=$($AutoTrainingInputs.Path)"
     if (Test-NonEmpty $AutoRecommendedLeadMode) {

@@ -16,6 +16,8 @@
 """
 import csv
 import json
+import os
+import random
 import re
 import time
 import shutil
@@ -85,6 +87,7 @@ DEFAULT_USE_DATA_PARALLEL = False  # 是否启用 DataParallel 多 GPU
 DEFAULT_DEVICE_IDS = None  # 例如 [0,1,2,3]，为空时使用所有可见 GPU
 DEFAULT_CV_FOLDS = 1  # K-fold cross validation (1 = disable)
 DEFAULT_CV_SEED = 42  # Random seed for CV splits
+DEFAULT_TRAIN_SEED = 42  # Random seed for model init / shuffle / deterministic training
 DEFAULT_TRAIN_RATIO = 0.8  # 留出法训练集比例
 DEFAULT_VAL_RATIO = 0.2  # 留出法验证集比例
 DEFAULT_TEST_RATIO = 0.0  # 留出法测试集比例，允许为 0
@@ -141,6 +144,7 @@ class TrainConfig:
     device_ids: list[int] | None = DEFAULT_DEVICE_IDS
     cv_folds: int = DEFAULT_CV_FOLDS
     cv_seed: int = DEFAULT_CV_SEED
+    train_seed: int = DEFAULT_TRAIN_SEED
     train_ratio: float = DEFAULT_TRAIN_RATIO
     val_ratio: float = DEFAULT_VAL_RATIO
     test_ratio: float = DEFAULT_TEST_RATIO
@@ -163,6 +167,55 @@ def get_default_config() -> TrainConfig:
     cfg = TrainConfig()
     _apply_best_params(cfg)
     return cfg
+
+
+def _set_training_seed(seed: int) -> None:
+    """统一固定 Python / NumPy / PyTorch / CUDA 随机源，尽量保证训练可复现。"""
+
+    seed = int(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    if hasattr(torch.backends, "cudnn"):
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        if hasattr(torch.backends.cudnn, "allow_tf32"):
+            torch.backends.cudnn.allow_tf32 = False
+    if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
+        torch.backends.cuda.matmul.allow_tf32 = False
+    torch.use_deterministic_algorithms(True)
+
+
+def _seed_dataloader_worker(worker_id: int) -> None:
+    """让 DataLoader worker 里的 numpy/random 也跟随 torch 初始种子。"""
+
+    worker_seed = torch.initial_seed() % (2 ** 32)
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
+
+def _make_dataloader(
+    dataset,
+    batch_size: int,
+    shuffle: bool,
+    num_workers: int,
+    seed: int,
+) -> DataLoader:
+    generator = torch.Generator()
+    generator.manual_seed(int(seed))
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        worker_init_fn=_seed_dataloader_worker,
+        generator=generator,
+    )
 
 def _load_manifest(json_path: Path) -> List[dict]:
     """读取 manifest 文件，返回所有样本条目的列表。"""
@@ -1323,26 +1376,30 @@ def _run_cross_validation(
 
     fold_results: List[dict] = []
     for fold_id, (train_idx, val_idx) in enumerate(splits, 1):
-        torch.manual_seed(cfg.cv_seed + fold_id)
+        fold_seed = int(cfg.train_seed) + fold_id
+        _set_training_seed(fold_seed)
         fold_dir = cfg.log_dir / f"fold_{fold_id:02d}"
 
-        train_loader = DataLoader(
+        train_loader = _make_dataloader(
             Subset(dataset, train_idx),
             batch_size=cfg.batch,
             shuffle=True,
             num_workers=cfg.num_workers,
+            seed=fold_seed,
         )
-        train_eval_loader = DataLoader(
+        train_eval_loader = _make_dataloader(
             Subset(dataset, train_idx),
             batch_size=cfg.batch,
             shuffle=False,
             num_workers=cfg.num_workers,
+            seed=fold_seed + 1,
         )
-        val_loader = DataLoader(
+        val_loader = _make_dataloader(
             Subset(dataset, val_idx),
             batch_size=cfg.batch,
             shuffle=False,
             num_workers=cfg.num_workers,
+            seed=fold_seed + 2,
         )
 
         train_count, train_events, train_ratio = _event_stats(dataset.events, train_idx)
@@ -1486,6 +1543,8 @@ def run_training(cfg: TrainConfig) -> dict:
             device = torch.device(f"cuda:{device_ids[0]}")
     breaks = SurvivalBreaks.from_uniform(cfg.max_time, cfg.n_intervals)
     preprocessing = _build_preprocessing_config(cfg)
+    _set_training_seed(cfg.train_seed)
+    print(f"[seed] cv_seed={cfg.cv_seed} | train_seed={cfg.train_seed} | deterministic=True")
     if cfg.csv_dir:
         dataset = ECGCSVSurvDataset(cfg.manifest, cfg.csv_dir, breaks, preprocessing, cfg.task_mode)
     else:
@@ -1506,10 +1565,34 @@ def run_training(cfg: TrainConfig) -> dict:
     )
 
     # 第二步：构建数据加载器，包含训练、评估、验证、测试
-    train_loader = DataLoader(train_set, batch_size=cfg.batch, shuffle=True, num_workers=cfg.num_workers)
-    train_eval_loader = DataLoader(train_set, batch_size=cfg.batch, shuffle=False, num_workers=cfg.num_workers)
-    val_loader = DataLoader(val_set, batch_size=cfg.batch, shuffle=False, num_workers=cfg.num_workers)
-    test_loader = DataLoader(test_set, batch_size=cfg.batch, shuffle=False, num_workers=cfg.num_workers)
+    train_loader = _make_dataloader(
+        train_set,
+        batch_size=cfg.batch,
+        shuffle=True,
+        num_workers=cfg.num_workers,
+        seed=cfg.train_seed,
+    )
+    train_eval_loader = _make_dataloader(
+        train_set,
+        batch_size=cfg.batch,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        seed=cfg.train_seed + 1,
+    )
+    val_loader = _make_dataloader(
+        val_set,
+        batch_size=cfg.batch,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        seed=cfg.train_seed + 2,
+    )
+    test_loader = _make_dataloader(
+        test_set,
+        batch_size=cfg.batch,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        seed=cfg.train_seed + 3,
+    )
 
     # 打印数据规模与事件比例，方便快速了解数据集
     num_samples = len(dataset)

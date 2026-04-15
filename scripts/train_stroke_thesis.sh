@@ -21,6 +21,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+export CUBLAS_WORKSPACE_CONFIG="${CUBLAS_WORKSPACE_CONFIG:-:4096:8}"
 
 resolve_repo_path() {
   local value="$1"
@@ -126,6 +127,7 @@ TEST_RATIO=0.0
 # - >1 表示启用 K 折交叉验证，此时比例参数会被忽略
 CV_FOLDS=1
 CV_SEED=42
+TRAIN_SEED=42
 
 # 早停与评估
 EVAL_THRESHOLD=0.5
@@ -153,6 +155,7 @@ set -a
 # shellcheck disable=SC1090
 source "$TRAINING_ENV_FILE"
 set +a
+export PYTHONHASHSEED="${TRAIN_SEED}"
 echo "[env] 已加载本地配置: $TRAINING_ENV_FILE"
 
 if [[ -z "$MANIFEST" ]]; then
@@ -226,6 +229,7 @@ CMD=(
   "--num-workers" "$NUM_WORKERS"
   "--cv-folds" "$CV_FOLDS"
   "--cv-seed" "$CV_SEED"
+  "--train-seed" "$TRAIN_SEED"
   "--train-ratio" "$TRAIN_RATIO"
   "--val-ratio" "$VAL_RATIO"
   "--test-ratio" "$TEST_RATIO"

@@ -63,6 +63,7 @@ test_ratio: 0.0
 # - >1 表示启用 K 折交叉验证，此时比例参数会被忽略
 cv_folds: 1
 cv_seed: 42
+train_seed: 42
 
 # 自动根据任务选择早停指标
 eval_threshold: 0.5

@@ -290,6 +290,7 @@ def run_survival(cfg: dict, python_bin: str, log_file: Path, summary: list) -> N
         "--device-ids": "device_ids",
         "--cv-folds": "cv_folds",
         "--cv-seed": "cv_seed",
+        "--train-seed": "train_seed",
         "--train-ratio": "train_ratio",
         "--val-ratio": "val_ratio",
         "--test-ratio": "test_ratio",
