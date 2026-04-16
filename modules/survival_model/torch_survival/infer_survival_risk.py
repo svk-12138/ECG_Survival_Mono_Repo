@@ -118,6 +118,24 @@ def _row_has_manifest_waveform_path(row: dict, field_name: str) -> bool:
     return bool(str(raw_value).strip())
 
 
+def _row_xml_file_value(row: dict, patient_index: Dict[str, Path] | None = None) -> str:
+    """导出风险分数时保留 manifest 原始 xml_file；缺失时回退到已匹配出的 XML 实际路径。"""
+
+    raw_value = row.get("xml_file")
+    if raw_value is not None:
+        text = str(raw_value).strip()
+        if text:
+            return text
+
+    patient_id = str(row.get("patient_id", "")).strip()
+    if patient_index and patient_id in patient_index:
+        try:
+            return str(patient_index[patient_id].resolve())
+        except Exception:
+            return str(patient_index[patient_id])
+    return ""
+
+
 class ECGXMLInferDataset(Dataset):
     def __init__(self, manifest_json: Path, xml_dir: Path, preprocessing: ECGPreprocessingConfig):
         self.rows = _load_manifest(manifest_json)
@@ -341,16 +359,22 @@ def main() -> None:
     model.eval()
 
     rows: list[dict] = []
+    row_cursor = 0
+    patient_index = getattr(dataset, "patient_index", None)
     with torch.no_grad():
         for pids, xb in loader:
+            batch_rows = dataset.rows[row_cursor : row_cursor + len(pids)]
+            if len(batch_rows) != len(pids):
+                raise RuntimeError("推理导出失败：批次样本数量与 manifest 行数不一致")
             xb = xb.to(device=device, dtype=torch.float32)
             logits = model(xb)
             probs = torch.sigmoid(logits)
             if task_mode == "classification":
                 event_prob = probs.view(-1).detach().cpu().numpy()
-                for pid, score in zip(pids, event_prob):
+                for row_meta, pid, score in zip(batch_rows, pids, event_prob):
                     row = {
                         "sample_id": pid,
+                        "xml_file": _row_xml_file_value(row_meta, patient_index),
                         "task_mode": task_mode,
                         "risk_horizon": np.nan,
                         "risk_score": float(score),
@@ -358,6 +382,7 @@ def main() -> None:
                     if args.save_full_curve:
                         row["p_event"] = float(score)
                     rows.append(row)
+                row_cursor += len(pids)
                 continue
 
             probs = torch.clamp(probs.view(xb.size(0), n_intervals), min=1e-7, max=1.0 - 1e-7)
@@ -365,9 +390,10 @@ def main() -> None:
             risk_curve = 1.0 - survival_curve
             risk_score = risk_curve[:, interval_idx]
             final_risk = risk_curve[:, -1]
-            for row_idx, pid in enumerate(pids):
+            for row_idx, (row_meta, pid) in enumerate(zip(batch_rows, pids)):
                 row = {
                     "sample_id": pid,
+                    "xml_file": _row_xml_file_value(row_meta, patient_index),
                     "task_mode": task_mode,
                     "risk_horizon": float(resolved_horizon),
                     "risk_score": float(risk_score[row_idx]),
@@ -377,6 +403,7 @@ def main() -> None:
                     for interval in range(n_intervals):
                         row[f"p_surv_t{interval + 1}"] = float(survival_curve[row_idx, interval])
                 rows.append(row)
+            row_cursor += len(pids)
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)

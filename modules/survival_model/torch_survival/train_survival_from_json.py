@@ -646,6 +646,24 @@ class ECGCSVSurvDataset(_BaseECGDataset):
         )
 
 
+def _row_xml_file_value(row: dict, patient_index: Dict[str, Path] | None = None) -> str:
+    """导出结果时优先保留 manifest 原始 xml_file；缺失时再回退到已解析出的真实 XML 路径。"""
+
+    raw_value = row.get("xml_file")
+    if raw_value is not None:
+        text = str(raw_value).strip()
+        if text:
+            return text
+
+    patient_id = str(row.get("patient_id", "")).strip()
+    if patient_index and patient_id in patient_index:
+        try:
+            return str(patient_index[patient_id].resolve())
+        except Exception:
+            return str(patient_index[patient_id])
+    return ""
+
+
 def _empty_metrics() -> dict:
     return {
         metric: float("nan")
@@ -848,6 +866,7 @@ def _export_subset_risk_scores(
         "sample_id",
         "patient_SN",
         "patient_id",
+        "xml_file",
         "event",
         "time",
         "risk_score",
@@ -857,6 +876,7 @@ def _export_subset_risk_scores(
     with output_path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
+        patient_index = getattr(dataset, "patient_index", None)
         for dataset_idx, score in zip(subset_indices.tolist(), scores):
             row = dataset.rows[int(dataset_idx)]
             patient_id = str(row.get("patient_id", "")).strip()
@@ -866,6 +886,7 @@ def _export_subset_risk_scores(
                     "sample_id": patient_id,
                     "patient_SN": str(row.get("patient_SN", "")).strip(),
                     "patient_id": patient_id,
+                    "xml_file": _row_xml_file_value(row, patient_index),
                     "event": int(dataset.events[int(dataset_idx)]),
                     "time": float(dataset.times[int(dataset_idx)]),
                     "risk_score": float(score),

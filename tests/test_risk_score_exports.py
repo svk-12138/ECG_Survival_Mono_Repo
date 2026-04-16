@@ -21,10 +21,10 @@ from torch_survival.train_survival_from_json import TrainConfig, _export_holdout
 class DummyPredictionDataset(Dataset):
     def __init__(self) -> None:
         self.rows = [
-            {"patient_SN": "SN001", "patient_id": "P001", "event": 1, "time": 12.0},
-            {"patient_SN": "SN002", "patient_id": "P002", "event": 0, "time": 25.0},
-            {"patient_SN": "SN003", "patient_id": "P003", "event": 1, "time": 36.0},
-            {"patient_SN": "SN004", "patient_id": "P004", "event": 0, "time": 48.0},
+            {"patient_SN": "SN001", "patient_id": "P001", "xml_file": "xmls/a.xml", "event": 1, "time": 12.0},
+            {"patient_SN": "SN002", "patient_id": "P002", "xml_file": "xmls/b.xml", "event": 0, "time": 25.0},
+            {"patient_SN": "SN003", "patient_id": "P003", "xml_file": "xmls/c.xml", "event": 1, "time": 36.0},
+            {"patient_SN": "SN004", "patient_id": "P004", "xml_file": "xmls/d.xml", "event": 0, "time": 48.0},
         ]
         self.events = np.array([1, 0, 1, 0], dtype=np.int64)
         self.times = np.array([12.0, 25.0, 36.0, 48.0], dtype=np.float32)
@@ -87,6 +87,7 @@ class RiskScoreExportTest(unittest.TestCase):
                     "sample_id",
                     "patient_SN",
                     "patient_id",
+                    "xml_file",
                     "event",
                     "time",
                     "risk_score",
@@ -98,6 +99,7 @@ class RiskScoreExportTest(unittest.TestCase):
             self.assertEqual(rows[0]["sample_id"], "P001")
             self.assertEqual(rows[0]["patient_SN"], "SN001")
             self.assertEqual(rows[0]["patient_id"], "P001")
+            self.assertEqual(rows[0]["xml_file"], "xmls/a.xml")
             self.assertEqual(rows[0]["event"], "1")
             self.assertEqual(rows[0]["time"], "12.0")
             self.assertAlmostEqual(float(rows[0]["risk_score"]), 0.5, places=6)
