@@ -203,37 +203,26 @@ function Get-AutoTrainingInputs {
 }
 
 # ==================== 默认参数 ====================
-# 下面这些值只是参数模板，用来说明每个配置项的含义。
-# 实际训练时，必须由 configs\train_stroke_thesis.env 覆盖。
-# 如果仓库附近存在 processed\training_inputs.json，下面这些路径会自动优先读取；
-# 若要手动指定路径，也建议写进 env 文件，而不是改本脚本。
 $Manifest = "D:\your\path\stroke_manifest.json"
-
-# ECG 数据二选一：
-# 1. 用 XML 就填 XmlDir，把 CsvDir 留空
 $XmlDir = "D:\your\path\xml_dir"
 $CsvDir = ""
-
-# 2. 用 CSV 就填 CsvDir，把 XmlDir 留空
-# $XmlDir = ""
-# $CsvDir = "D:\your\path\csv_dir"
-
-# 任务类型：
-# prediction    = 生存预测，建议作为论文主实验
-# classification = 二分类，建议作为对照实验
 $TaskMode = "prediction"
 
-# 模型架构：
-# resnet        = ResNet1d（论文同款，适合10000+样本）
-# tcn_light     = TCN轻量版（适合1200样本，参数量~25,000）
-# cnn_transformer = CNN+Transformer（实验性，参数量过大）
+# 模型预设（优先级高于 ModelType）：
+# tcn_light       = TCN轻量版（~25k参数，适合1200样本）
+# resnet_small    = ResNet1d小版（~12万参数，适合1万样本）★ 医生端推荐
+# resnet_standard = ResNet1d标准版（~294万参数，适合10万+样本）
+# cnn_transformer = CNN+Transformer（~69万参数，实验性）
+$ModelName = ""
+
+# 若不使用预设，直接指定模型架构（ModelName 留空时生效）
 $ModelType = "resnet"
 
-# 导联类型：
-# 8lead  = I, II, V1-V6
-# 12lead = I, II, III, aVR, aVL, aVF, V1-V6
-# auto   = 若存在 training_inputs.json，则自动使用其中推荐值
 $LeadMode = "12lead"
+
+# 固定划分文件：首次训练自动生成，后续自动复用，确保每次数据集组成完全一致
+# 留空则每次随机划分（不推荐）
+$SplitFile = "outputs/stroke_survival_thesis/dataset_split.json"
 # ==================================================
 
 # ==================== 常用参数 ====================
@@ -308,8 +297,10 @@ if ($EnvConfig.ContainsKey('MANIFEST')) { $Manifest = [string]$EnvConfig['MANIFE
 if ($EnvConfig.ContainsKey('XML_DIR')) { $XmlDir = [string]$EnvConfig['XML_DIR'] }
 if ($EnvConfig.ContainsKey('CSV_DIR')) { $CsvDir = [string]$EnvConfig['CSV_DIR'] }
 if ($EnvConfig.ContainsKey('TASK_MODE')) { $TaskMode = [string]$EnvConfig['TASK_MODE'] }
+if ($EnvConfig.ContainsKey('MODEL_NAME')) { $ModelName = [string]$EnvConfig['MODEL_NAME'] }
 if ($EnvConfig.ContainsKey('MODEL_TYPE')) { $ModelType = [string]$EnvConfig['MODEL_TYPE'] }
 if ($EnvConfig.ContainsKey('LEAD_MODE')) { $LeadMode = [string]$EnvConfig['LEAD_MODE'] }
+if ($EnvConfig.ContainsKey('SPLIT_FILE')) { $SplitFile = [string]$EnvConfig['SPLIT_FILE'] }
 if ($EnvConfig.ContainsKey('N_INTERVALS')) { $NIntervals = [string]$EnvConfig['N_INTERVALS'] }
 if ($EnvConfig.ContainsKey('MAX_TIME')) { $MaxTime = [string]$EnvConfig['MAX_TIME'] }
 if ($EnvConfig.ContainsKey('PREDICTION_HORIZON')) { $PredictionHorizon = [string]$EnvConfig['PREDICTION_HORIZON'] }
@@ -428,13 +419,21 @@ if ((Test-NonEmpty $CsvDirResolved) -and (-not (Test-Path -LiteralPath $CsvDirRe
 
 $LogDirResolved = Resolve-RepoPath $LogDir
 $BestParamsResolved = Resolve-RepoPath $BestParams
+$SplitFileResolved = if (Test-NonEmpty $SplitFile) { Resolve-RepoPath $SplitFile } else { "" }
 New-Item -ItemType Directory -Force -Path $LogDirResolved | Out-Null
 
 $CommandArgs = @()
 $CommandArgs += Join-Path $Root 'scripts/run_survival_training.py'
 $CommandArgs += @('--manifest', $ManifestResolved)
 $CommandArgs += @('--task-mode', $TaskMode)
-$CommandArgs += @('--model-type', $ModelType)
+
+# 优先使用 MODEL_NAME 预设，若为空则使用 MODEL_TYPE
+if (Test-NonEmpty $ModelName) {
+    $CommandArgs += @('--model-name', $ModelName)
+} else {
+    $CommandArgs += @('--model-type', $ModelType)
+}
+
 $CommandArgs += @('--lead-mode', $LeadMode)
 $CommandArgs += @('--n-intervals', $NIntervals.ToString())
 $CommandArgs += @('--max-time', $MaxTime.ToString())
@@ -499,9 +498,14 @@ if ($UseBestParams) {
     $CommandArgs += @('--use-best-params', '--best-params', $BestParamsResolved)
 }
 
+if (Test-NonEmpty $SplitFileResolved) {
+    $CommandArgs += @('--split-file', $SplitFileResolved)
+}
+
+$ModelDisplay = if (Test-NonEmpty $ModelName) { "preset:$ModelName" } else { $ModelType }
 Write-Host '[info] 即将启动训练，关键参数如下：'
 Write-Host "  task_mode=$TaskMode"
-Write-Host "  model_type=$ModelType"
+Write-Host "  model=$ModelDisplay"
 Write-Host "  lead_mode=$LeadMode"
 Write-Host "  manifest=$ManifestResolved"
 Write-Host "  xml_dir=$XmlDirResolved"
@@ -509,6 +513,7 @@ Write-Host "  csv_dir=$CsvDirResolved"
 Write-Host "  log_dir=$LogDirResolved"
 Write-Host "  prediction_horizon=$PredictionHorizon"
 Write-Host "  split_ratio=train:$TrainRatio val:$ValRatio test:$TestRatio"
+Write-Host "  split_file=$SplitFileResolved"
 Write-Host "  cv_folds=$CVFolds"
 Write-Host "  train_seed=$TrainSeed"
 if ($AutoTrainingInputs) {

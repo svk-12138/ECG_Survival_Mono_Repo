@@ -57,12 +57,121 @@ from modules.survival_model.torch_survival.train_survival_from_json import (
 )
 
 
+# ==================== 模型预设系统 ====================
+# 基于模型选型规则，为不同样本量推荐合适的模型架构和超参数
+MODEL_PRESETS = {
+    # 传统ML基线（不使用深度学习，仅供对比）
+    "xgboost": {
+        "description": "XGBoost基线（需单独运行 scripts/baseline_ml.py）",
+        "model_type": None,  # 不适用
+    },
+
+    # 小样本场景（1200样本）
+    "tcn_light": {
+        "description": "TCN轻量版（参数量~25k，适合1200样本）",
+        "model_type": "tcn_light",
+        "batch": 16,
+        "epochs": 100,
+        "lr": 0.001,
+        "dropout": 0.3,
+        "weight_decay": 0.0001,
+        "n_intervals": 15,
+    },
+
+    # 中等样本场景（1万样本）
+    "resnet_small": {
+        "description": "ResNet1d小版（参数量~12万，适合1万样本）",
+        "model_type": "resnet",
+        "batch": 32,
+        "epochs": 80,
+        "lr": 0.0005,
+        "dropout": 0.5,
+        "weight_decay": 0.0001,
+        "n_intervals": 20,
+    },
+
+    # 大样本场景（10万+样本）
+    "resnet_standard": {
+        "description": "ResNet1d标准版（参数量~294万，适合10万+样本，论文同款）",
+        "model_type": "resnet",
+        "batch": 64,
+        "epochs": 100,
+        "lr": 0.0003,
+        "dropout": 0.8,
+        "weight_decay": 0.0001,
+        "n_intervals": 40,
+    },
+
+    # 实验性模型
+    "cnn_transformer": {
+        "description": "CNN+Transformer（参数量~69万，实验性，需要足够样本）",
+        "model_type": "cnn_transformer",
+        "batch": 32,
+        "epochs": 80,
+        "lr": 0.0005,
+        "dropout": 0.3,
+        "weight_decay": 0.0001,
+        "n_intervals": 20,
+    },
+}
+
+
+def get_model_preset(name: str) -> dict:
+    """获取模型预设配置"""
+    if name not in MODEL_PRESETS:
+        available = ", ".join(MODEL_PRESETS.keys())
+        raise ValueError(f"未知的模型预设: {name}。可用预设: {available}")
+    return MODEL_PRESETS[name].copy()
+
+
+def list_model_presets():
+    """列出所有可用的模型预设"""
+    print("\n可用的模型预设：")
+    print("=" * 80)
+    for name, preset in MODEL_PRESETS.items():
+        desc = preset.get("description", "")
+        model_type = preset.get("model_type", "N/A")
+        print(f"  {name:20s} - {desc}")
+        if model_type:
+            print(f"                       模型架构: {model_type}")
+    print("=" * 80)
+    print("\n使用方法：")
+    print("  1. 在 configs/train_stroke_thesis.env 中设置: MODEL_NAME=tcn_light")
+    print("  2. 或命令行: python scripts/run_survival_training.py --model-name tcn_light ...")
+    print()
+# ======================================================
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Survival training wrapper loading TrainConfig overrides."
     )
     parser.add_argument("--config", type=Path, default=None,
                         help="YAML file containing TrainConfig overrides.")
+    # 模型预设（优先级高于 --model-type，会自动展开为对应超参数）
+    parser.add_argument(
+        "--model-name",
+        type=str,
+        default=None,
+        help=(
+            "模型预设名称，自动设置 model_type 和对应超参数。"
+            f" 可选: {', '.join(MODEL_PRESETS.keys())}。"
+            " 设置后会覆盖 --model-type / --batch / --dropout / --n-intervals 等参数。"
+        ),
+    )
+    parser.add_argument("--list-models", action="store_true", default=False,
+                        help="列出所有可用的模型预设后退出。")
+    # 固定划分文件
+    parser.add_argument(
+        "--split-file",
+        type=Path,
+        default=None,
+        help=(
+            "固定数据集划分文件路径（JSON）。"
+            " 文件存在时直接加载，确保每次训练使用完全相同的 train/val/test 组成；"
+            " 文件不存在时随机划分后自动保存，供后续复用。"
+        ),
+    )
     parser.add_argument("--xml-dir", type=Path, default=None, help="ECG XML directory.")
     parser.add_argument("--csv-dir", type=Path, default=None, help="ECG CSV directory (optional).")
     parser.add_argument("--manifest", type=Path, default=None, help="JSON manifest path.")
@@ -187,8 +296,24 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
+    # 列出模型预设后退出
+    if args.list_models:
+        list_model_presets()
+        return
+
     cfg = get_default_config()
     yaml_overrides = load_yaml_overrides(args.config)
+
+    # 处理模型预设：优先级高于单独的 model_type/batch/dropout 等参数
+    model_preset_overrides = {}
+    model_name = args.model_name or yaml_overrides.get("model_name")
+    if model_name:
+        preset = get_model_preset(model_name)
+        print(f"[model_preset] 使用预设: {model_name} - {preset.get('description', '')}")
+        # 移除 description 字段，只保留配置参数
+        preset.pop("description", None)
+        model_preset_overrides = preset
+
     cli_overrides = {k: getattr(args, k) for k in (
         "xml_dir", "csv_dir", "manifest", "task_mode", "model_type", "lead_mode", "n_intervals", "max_time", "prediction_horizon",
         "target_len", "waveform_type", "resample_hz", "apply_filters", "bandpass_low_hz",
@@ -196,10 +321,13 @@ def main() -> None:
         "lr", "num_workers", "dropout", "weight_decay", "sched_tmax",
         "eval_threshold", "pos_weight_mult", "early_stop_patience", "early_stop_min_delta",
         "early_stop_metric", "log_dir", "device", "use_data_parallel", "device_ids",
-        "inspect", "cv_folds", "cv_seed", "train_seed", "train_ratio", "val_ratio", "test_ratio"
+        "inspect", "cv_folds", "cv_seed", "train_seed", "train_ratio", "val_ratio", "test_ratio", "split_file"
     )}
-    combined = {**yaml_overrides, **{k: v for k, v in cli_overrides.items() if v is not None}}
+
+    # 合并优先级：yaml < model_preset < cli（cli 优先级最高）
+    combined = {**yaml_overrides, **model_preset_overrides, **{k: v for k, v in cli_overrides.items() if v is not None}}
     cfg = apply_overrides(cfg, combined)
+
     use_best = args.use_best_params or bool(yaml_overrides.get("use_best_params"))
     best_params_path = args.best_params or yaml_overrides.get("best_params")
     if best_params_path:

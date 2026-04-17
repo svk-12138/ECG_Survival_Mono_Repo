@@ -96,6 +96,7 @@ DEFAULT_TRAIN_SEED = 42  # Random seed for model init / shuffle / deterministic 
 DEFAULT_TRAIN_RATIO = 0.8  # 留出法训练集比例
 DEFAULT_VAL_RATIO = 0.2  # 留出法验证集比例
 DEFAULT_TEST_RATIO = 0.0  # 留出法测试集比例，允许为 0
+DEFAULT_SPLIT_FILE: Path | None = None  # 固定划分文件路径；存在则加载，不存在则生成
 DEFAULT_CSV_DIR = None
 DEFAULT_TASK_MODE = "prediction"
 DEFAULT_MODEL_TYPE = "resnet"  # 可选: resnet, cnn_transformer, tcn_light
@@ -155,6 +156,7 @@ class TrainConfig:
     train_ratio: float = DEFAULT_TRAIN_RATIO
     val_ratio: float = DEFAULT_VAL_RATIO
     test_ratio: float = DEFAULT_TEST_RATIO
+    split_file: Path | None = DEFAULT_SPLIT_FILE  # 固定划分文件；存在则加载，不存在则生成并保存
 
 def _apply_best_params(cfg: TrainConfig) -> None:
     if not BEST_PARAMS_PATH.exists():
@@ -1085,6 +1087,86 @@ def _split_dataset(
     return Subset(dataset, train_idx), Subset(dataset, val_idx), Subset(dataset, test_idx)
 
 
+def _split_dataset_with_cache(
+    dataset,
+    train_ratio: float,
+    val_ratio: float,
+    test_ratio: float,
+    seed: int = 42,
+    split_file: Path | None = None,
+):
+    """带缓存的数据集划分。
+
+    - split_file 存在：直接加载，跳过随机划分，确保每次使用完全相同的 train/val/test。
+    - split_file 不存在：随机划分后保存到 split_file，供后续复用。
+    - split_file 为 None：退化为普通随机划分，不保存。
+    """
+    groups = _dataset_groups(dataset)
+
+    if split_file is not None:
+        split_path = Path(split_file)
+        if split_path.exists():
+            data = json.loads(split_path.read_text(encoding="utf-8"))
+            train_groups = np.array(data["train"], dtype=object)
+            val_groups = np.array(data["val"], dtype=object)
+            test_groups = np.array(data["test"], dtype=object)
+            # 校验：split 里的 group_id 必须全部存在于当前 dataset
+            all_known = set(str(g) for g in groups)
+            for split_name, split_groups in (("train", train_groups), ("val", val_groups), ("test", test_groups)):
+                unknown = [g for g in split_groups if str(g) not in all_known]
+                if unknown:
+                    raise ValueError(
+                        f"[split_file] {split_name} 中有 {len(unknown)} 个 group_id 在当前 manifest 中不存在，"
+                        f"请删除 {split_path} 重新生成，或检查 manifest 是否匹配。\n"
+                        f"示例未知 ID: {unknown[:5]}"
+                    )
+            train_idx = _subset_indices_for_groups(dataset, train_groups)
+            val_idx = _subset_indices_for_groups(dataset, val_groups)
+            test_idx = _subset_indices_for_groups(dataset, test_groups)
+            group_field = _dataset_group_field(dataset)
+            print(
+                f"[split] 已从缓存文件加载固定划分: {split_path}\n"
+                f"  train={len(train_idx)} samples ({len(train_groups)} {group_field})"
+                f" | val={len(val_idx)} samples ({len(val_groups)} {group_field})"
+                f" | test={len(test_idx)} samples ({len(test_groups)} {group_field})"
+            )
+            return Subset(dataset, train_idx), Subset(dataset, val_idx), Subset(dataset, test_idx)
+
+    # 随机划分
+    train_set, val_set, test_set = _split_dataset(
+        dataset, train_ratio=train_ratio, val_ratio=val_ratio, test_ratio=test_ratio, seed=seed
+    )
+
+    if split_file is not None:
+        split_path = Path(split_file)
+        split_path.parent.mkdir(parents=True, exist_ok=True)
+        group_field = _dataset_group_field(dataset)
+
+        def _groups_for_subset(subset) -> list[str]:
+            if not isinstance(subset, Subset) or len(subset.indices) == 0:
+                return []
+            idx_arr = np.array(subset.indices, dtype=np.int64)
+            group_ids = getattr(dataset, "group_ids", getattr(dataset, "patient_ids"))
+            return [str(group_ids[int(i)]) for i in idx_arr]
+
+        split_data = {
+            "split_file_version": 1,
+            "group_field": group_field,
+            "seed": seed,
+            "train_ratio": train_ratio,
+            "val_ratio": val_ratio,
+            "test_ratio": test_ratio,
+            "manifest": str(dataset.rows[0].get("patient_id", "")) if dataset.rows else "",
+            "train": _groups_for_subset(train_set),
+            "val": _groups_for_subset(val_set),
+            "test": _groups_for_subset(test_set),
+        }
+        split_path.write_text(json.dumps(split_data, indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"[split] 固定划分已保存到: {split_path}（下次训练将自动复用）")
+
+    return train_set, val_set, test_set
+
+
 def _normalize_device_ids(value) -> list[int] | None:
     """Parse device ids from list or comma/space separated string."""
 
@@ -1773,12 +1855,13 @@ def run_training(cfg: TrainConfig) -> dict:
         print("[export] 已跳过自动 risk_score 导出：当前仅在 holdout 模式下导出 train/val/test CSV。")
         return _run_cross_validation(cfg, dataset, device, device_ids)
 
-    train_set, val_set, test_set = _split_dataset(
+    train_set, val_set, test_set = _split_dataset_with_cache(
         dataset,
         train_ratio=cfg.train_ratio,
         val_ratio=cfg.val_ratio,
         test_ratio=cfg.test_ratio,
         seed=cfg.cv_seed,
+        split_file=cfg.split_file,
     )
 
     # 第二步：构建数据加载器，包含训练、评估、验证、测试

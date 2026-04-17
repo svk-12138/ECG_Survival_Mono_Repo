@@ -33,11 +33,13 @@ lead_mode: 8lead
 n_intervals: 20
 
 # 按你的随访窗口设置，单位应与 manifest.time 一致
-max_time: 3650.0
+# 医院端11606样本推荐5年窗口（覆盖79.2%事件，761/961例）
+# 本地1112样本平均随访3.7年，建议改为 1095.0（3年）
+max_time: 1826.25
 
-# 若想评估某个固定时间点风险，填具体数值，例如 365/1095/1825
-# 若设为 null，则默认输出整个 max_time 窗口内的累计风险
-prediction_horizon: null
+# 评估5年卒中风险（临床标准，对标葛均波EHJ论文）
+# 本地1112样本建议改为 1095.0（3年）
+prediction_horizon: 1826.25
 
 # 论文风格预处理
 waveform_type: Rhythm

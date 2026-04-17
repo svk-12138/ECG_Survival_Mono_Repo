@@ -79,16 +79,24 @@ CSV_DIR=""
 # classification = 二分类，建议作为对照实验
 TASK_MODE="prediction"
 
-# 模型架构：
-# resnet        = ResNet1d（论文同款，适合10000+样本）
-# tcn_light     = TCN轻量版（适合1200样本，参数量~25,000）
-# cnn_transformer = CNN+Transformer（实验性，参数量过大）
+# 模型预设（优先级高于 MODEL_TYPE）：
+# tcn_light       = TCN轻量版（~25k参数，适合1200样本）
+# resnet_small    = ResNet1d小版（~12万参数，适合1万样本）★ 医生端推荐
+# resnet_standard = ResNet1d标准版（~294万参数，适合10万+样本）
+# cnn_transformer = CNN+Transformer（~69万参数，实验性）
+MODEL_NAME=""
+
+# 若不使用预设，直接指定模型架构（MODEL_NAME 留空时生效）
 MODEL_TYPE="resnet"
 
 # 导联类型：
 # 8lead  = I, II, V1-V6
 # 12lead = I, II, III, aVR, aVL, aVF, V1-V6
 LEAD_MODE="12lead"
+
+# 固定划分文件：首次训练自动生成，后续自动复用，确保每次数据集组成完全一致
+# 留空则每次随机划分（不推荐）
+SPLIT_FILE="outputs/stroke_survival_thesis/dataset_split.json"
 # ==================================================
 
 # ==================== 常用参数 ====================
@@ -185,9 +193,22 @@ if [[ "$TASK_MODE" != "prediction" && "$TASK_MODE" != "classification" ]]; then
 fi
 
 MODEL_TYPE="${MODEL_TYPE:-resnet}"
-if [[ "$MODEL_TYPE" != "resnet" && "$MODEL_TYPE" != "tcn_light" && "$MODEL_TYPE" != "cnn_transformer" ]]; then
-  echo "[error] MODEL_TYPE 只能是 resnet、tcn_light 或 cnn_transformer"
-  exit 1
+# 若设置了 MODEL_NAME 预设，校验其合法性；否则校验 MODEL_TYPE
+VALID_MODEL_NAMES="tcn_light resnet_small resnet_standard cnn_transformer"
+if [[ -n "${MODEL_NAME:-}" ]]; then
+  valid=false
+  for name in $VALID_MODEL_NAMES; do
+    [[ "$MODEL_NAME" == "$name" ]] && valid=true && break
+  done
+  if [[ "$valid" != "true" ]]; then
+    echo "[error] MODEL_NAME 只能是: $VALID_MODEL_NAMES"
+    exit 1
+  fi
+else
+  if [[ "$MODEL_TYPE" != "resnet" && "$MODEL_TYPE" != "tcn_light" && "$MODEL_TYPE" != "cnn_transformer" ]]; then
+    echo "[error] MODEL_TYPE 只能是 resnet、tcn_light 或 cnn_transformer"
+    exit 1
+  fi
 fi
 
 if [[ "$LEAD_MODE" != "8lead" && "$LEAD_MODE" != "12lead" ]]; then
@@ -216,6 +237,7 @@ fi
 
 LOG_DIR_PATH="$(resolve_repo_path "$LOG_DIR")"
 BEST_PARAMS_PATH="$(resolve_repo_path "$BEST_PARAMS")"
+SPLIT_FILE_PATH="$(resolve_repo_path "${SPLIT_FILE:-}")"
 mkdir -p "$LOG_DIR_PATH"
 
 CMD=(
@@ -223,7 +245,6 @@ CMD=(
   "$ROOT/scripts/run_survival_training.py"
   "--manifest" "$MANIFEST_PATH"
   "--task-mode" "$TASK_MODE"
-  "--model-type" "$MODEL_TYPE"
   "--lead-mode" "$LEAD_MODE"
   "--n-intervals" "$N_INTERVALS"
   "--max-time" "$MAX_TIME"
@@ -253,6 +274,13 @@ CMD=(
   "--pos-weight-mult" "$POS_WEIGHT_MULT"
   "--log-dir" "$LOG_DIR_PATH"
 )
+
+# 优先使用 MODEL_NAME 预设，若为空则使用 MODEL_TYPE
+if [[ -n "${MODEL_NAME:-}" ]]; then
+  CMD+=("--model-name" "$MODEL_NAME")
+else
+  CMD+=("--model-type" "$MODEL_TYPE")
+fi
 
 if [[ -n "$XML_DIR_PATH" ]]; then
   CMD+=("--xml-dir" "$XML_DIR_PATH")
@@ -288,9 +316,14 @@ if [[ "$USE_BEST_PARAMS" == "true" ]]; then
   CMD+=("--use-best-params" "--best-params" "$BEST_PARAMS_PATH")
 fi
 
+if [[ -n "${SPLIT_FILE_PATH:-}" ]]; then
+  CMD+=("--split-file" "$SPLIT_FILE_PATH")
+fi
+
+MODEL_DISPLAY="${MODEL_NAME:-$MODEL_TYPE}"
 echo "[info] 即将启动训练，关键参数如下："
 echo "  task_mode=$TASK_MODE"
-echo "  model_type=$MODEL_TYPE"
+echo "  model=$MODEL_DISPLAY"
 echo "  lead_mode=$LEAD_MODE"
 echo "  manifest=$MANIFEST_PATH"
 echo "  xml_dir=$XML_DIR_PATH"
@@ -298,6 +331,7 @@ echo "  csv_dir=$CSV_DIR_PATH"
 echo "  log_dir=$LOG_DIR_PATH"
 echo "  prediction_horizon=$PREDICTION_HORIZON"
 echo "  split_ratio=train:$TRAIN_RATIO val:$VAL_RATIO test:$TEST_RATIO"
+echo "  split_file=${SPLIT_FILE_PATH:-（未设置，每次随机划分）}"
 echo "  cv_folds=$CV_FOLDS"
 if [[ -n "$TRAINING_ENV_FILE" ]]; then
   echo "  env_file=$TRAINING_ENV_FILE"
