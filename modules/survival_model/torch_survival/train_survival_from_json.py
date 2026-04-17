@@ -57,7 +57,11 @@ from torch_survival.ecg_preprocessing import (
     resolve_leads,
 )
 from torch_survival.losses import SurvLikelihoodLoss
-from torch_survival.model_builder import build_survival_resnet
+from torch_survival.model_builder import (
+    build_survival_resnet,
+    build_survival_cnn_transformer,
+    build_survival_tcn_light,
+)
 
 # ====================== 超参数区域 ======================
 # 把你的数据路径与训练配置集中放在这里。
@@ -94,6 +98,7 @@ DEFAULT_VAL_RATIO = 0.2  # 留出法验证集比例
 DEFAULT_TEST_RATIO = 0.0  # 留出法测试集比例，允许为 0
 DEFAULT_CSV_DIR = None
 DEFAULT_TASK_MODE = "prediction"
+DEFAULT_MODEL_TYPE = "resnet"  # 可选: resnet, cnn_transformer, tcn_light
 DEFAULT_LEAD_MODE = "8lead"
 DEFAULT_PREDICTION_HORIZON = 365.25 * 5.0  # 论文预测评估使用 5 年风险
 DEFAULT_WAVEFORM_TYPE = "Rhythm"
@@ -114,6 +119,7 @@ class TrainConfig:
     csv_dir: Path | None = DEFAULT_CSV_DIR
     manifest: Path = DEFAULT_MANIFEST
     task_mode: Literal["prediction", "classification"] = DEFAULT_TASK_MODE
+    model_type: str = DEFAULT_MODEL_TYPE  # resnet | cnn_transformer | tcn_light
     lead_mode: str = DEFAULT_LEAD_MODE
     n_intervals: int = DEFAULT_NUM_INTERVALS
     max_time: float = DEFAULT_MAX_TIME
@@ -1209,11 +1215,29 @@ def _train_model(
     fold_prefix = f"[Fold {fold_label}] " if fold_label else ""
     breaks = SurvivalBreaks.from_uniform(cfg.max_time, cfg.n_intervals)
     leads = resolve_leads(cfg.lead_mode)
-    model = build_survival_resnet(
-        cfg.n_intervals,
-        input_dim=(len(leads), cfg.target_len),
-        dropout_rate=cfg.dropout,
-    )
+
+    # 根据model_type选择模型架构
+    if cfg.model_type == "resnet":
+        model = build_survival_resnet(
+            cfg.n_intervals,
+            input_dim=(len(leads), cfg.target_len),
+            dropout_rate=cfg.dropout,
+        )
+    elif cfg.model_type == "cnn_transformer":
+        model = build_survival_cnn_transformer(
+            n_intervals=cfg.n_intervals,
+            input_dim=(len(leads), cfg.target_len),
+            dropout_rate=cfg.dropout,
+        )
+    elif cfg.model_type == "tcn_light":
+        model = build_survival_tcn_light(
+            n_intervals=cfg.n_intervals,
+            input_dim=(len(leads), cfg.target_len),
+            dropout=cfg.dropout,
+        )
+    else:
+        raise ValueError(f"Unknown model_type: {cfg.model_type}. Must be one of: resnet, cnn_transformer, tcn_light")
+
     model = model.to(device=device, dtype=torch.float32)
     if cfg.use_data_parallel and device.type == "cuda":
         device_ids = device_ids or list(range(torch.cuda.device_count()))

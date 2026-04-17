@@ -1,0 +1,10 @@
+{
+  "total_samples": 1112,
+  "events": 170,
+  "event_rate": 0.1528776978417266,
+  "af_samples": 97,
+  "af_rate": 0.08723021582733813,
+  "arrhythmia_samples": 453,
+  "mean_age": 66.29856115107914,
+  "mean_followup_days": 1349.3660071942445
+}

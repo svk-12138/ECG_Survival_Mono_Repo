@@ -120,4 +120,124 @@ def build_survival_resnet(
     return backbone.float()
 
 
-__all__ = ["build_survival_cnn_transformer", "build_survival_resnet"]
+class TCNLightSurvival(nn.Module):
+    """时序卷积网络（TCN）轻量版，用于生存分析
+
+    特点：
+    - 因果卷积（无信息泄露，padding在左侧）
+    - 膨胀卷积（扩大感受野）
+    - 残差连接
+    - 参数量约25,000（适合1200样本）
+
+    架构：
+    - 输入：(batch, in_channels, seq_len)
+    - TCN块1：16通道，膨胀率1
+    - TCN块2：32通道，膨胀率2
+    - TCN块3：64通道，膨胀率4
+    - 全局平均池化
+    - 输出层：64 → n_intervals
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        n_intervals: int,
+        num_channels: Sequence[int] = (16, 32, 64),
+        kernel_size: int = 3,
+        dropout: float = 0.3,
+    ):
+        super().__init__()
+
+        layers = []
+        num_levels = len(num_channels)
+
+        for i in range(num_levels):
+            dilation_size = 2 ** i
+            in_ch = in_channels if i == 0 else num_channels[i-1]
+            out_ch = num_channels[i]
+
+            # 因果卷积：padding只在左侧
+            padding = (kernel_size - 1) * dilation_size
+
+            layers.append(
+                nn.Sequential(
+                    # 第一个卷积
+                    nn.Conv1d(
+                        in_ch, out_ch, kernel_size,
+                        stride=1, padding=padding, dilation=dilation_size
+                    ),
+                    nn.BatchNorm1d(out_ch),
+                    nn.ReLU(inplace=True),
+                    nn.Dropout(dropout),
+
+                    # 第二个卷积
+                    nn.Conv1d(
+                        out_ch, out_ch, kernel_size,
+                        stride=1, padding=padding, dilation=dilation_size
+                    ),
+                    nn.BatchNorm1d(out_ch),
+                    nn.ReLU(inplace=True),
+                    nn.Dropout(dropout),
+                )
+            )
+
+            # 残差连接的shortcut
+            if in_ch != out_ch:
+                layers.append(nn.Conv1d(in_ch, out_ch, kernel_size=1))
+            else:
+                layers.append(nn.Identity())
+
+        self.tcn_blocks = nn.ModuleList(layers[::2])  # 主路径
+        self.shortcuts = nn.ModuleList(layers[1::2])  # 残差连接
+
+        # 全局平均池化 + 输出层
+        self.global_pool = nn.AdaptiveAvgPool1d(1)
+        self.fc = nn.Linear(num_channels[-1], n_intervals)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (B, C, L)
+        for tcn_block, shortcut in zip(self.tcn_blocks, self.shortcuts):
+            residual = shortcut(x)
+            out = tcn_block(x)
+            # 裁剪因果padding产生的右侧多余部分
+            out = out[:, :, :x.size(2)]
+            x = out + residual
+
+        # 全局池化
+        x = self.global_pool(x).squeeze(-1)  # (B, C)
+        return self.fc(x)
+
+
+def build_survival_tcn_light(
+    n_intervals: int,
+    input_dim: Tuple[int, int] = (8, 4096),
+    num_channels: Sequence[int] = (16, 32, 64),
+    kernel_size: int = 3,
+    dropout: float = 0.3,
+) -> nn.Module:
+    """构建TCN轻量版生存模型
+
+    参数量估算：~25,000
+    适用场景：1200样本
+
+    Args:
+        n_intervals: 离散时间区间数
+        input_dim: (n_channels, seq_len)，默认(8, 4096)
+        num_channels: TCN各层通道数，默认(16, 32, 64)
+        kernel_size: 卷积核大小，默认3
+        dropout: Dropout率，默认0.3
+
+    Returns:
+        TCNLightSurvival模型
+    """
+    model = TCNLightSurvival(
+        in_channels=input_dim[0],
+        n_intervals=n_intervals,
+        num_channels=num_channels,
+        kernel_size=kernel_size,
+        dropout=dropout,
+    )
+    return model.float()
+
+
+__all__ = ["build_survival_cnn_transformer", "build_survival_resnet", "build_survival_tcn_light"]

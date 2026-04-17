@@ -10,24 +10,30 @@
 # 4. 1200 条左右的小样本，优先使用 prediction + 5 折交叉验证。
 
 # 必填：标签文件，字段至少包含 patient_id / time / event
-manifest: /path/to/stroke_manifest.json
+manifest: data/stroke_1113/manifest.json
 
 # 二选一：
-xml_dir: /path/to/xml_dir
+xml_dir: /media/lijiajun/DataSet/all/ECGdata/XML
 csv_dir: null
 
 # 推荐：prediction 做生存预测；classification 保留为基线对照实验
 task_mode: prediction
 
+# 模型架构选择
+# resnet        → ResNet1d（论文同款，适合10000+样本）
+# cnn_transformer → CNN+Transformer（实验性，参数量过大）
+# tcn_light     → TCN轻量版（适合1200样本，参数量~25,000）
+model_type: resnet
+
 # 8lead = I, II, V1-V6
 # 12lead = I, II, III, aVR, aVL, aVF, V1-V6
-lead_mode: 12lead
+lead_mode: 8lead
 
 # 小样本建议减少时间区间数，避免过稀疏
 n_intervals: 20
 
 # 按你的随访窗口设置，单位应与 manifest.time 一致
-max_time: 1825.0
+max_time: 3650.0
 
 # 若想评估某个固定时间点风险，填具体数值，例如 365/1095/1825
 # 若设为 null，则默认输出整个 max_time 窗口内的累计风险
@@ -61,7 +67,7 @@ test_ratio: 0.0
 # 是否启用交叉验证：
 # - 1 表示使用上面的 train/val/test 比例
 # - >1 表示启用 K 折交叉验证，此时比例参数会被忽略
-cv_folds: 1
+cv_folds: 5
 cv_seed: 42
 train_seed: 42
 

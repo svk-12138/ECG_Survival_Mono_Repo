@@ -67,6 +67,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--csv-dir", type=Path, default=None, help="ECG CSV directory (optional).")
     parser.add_argument("--manifest", type=Path, default=None, help="JSON manifest path.")
     parser.add_argument(
+        "--model-type",
+        type=str,
+        choices=["resnet", "cnn_transformer", "tcn_light"],
+        default=None,
+        help="模型架构：resnet（论文同款）| cnn_transformer（实验性）| tcn_light（轻量版，适合小样本）",
+    )
+    parser.add_argument(
         "--task-mode",
         type=str,
         choices=["prediction", "classification"],
@@ -183,7 +190,7 @@ def main() -> None:
     cfg = get_default_config()
     yaml_overrides = load_yaml_overrides(args.config)
     cli_overrides = {k: getattr(args, k) for k in (
-        "xml_dir", "csv_dir", "manifest", "task_mode", "lead_mode", "n_intervals", "max_time", "prediction_horizon",
+        "xml_dir", "csv_dir", "manifest", "task_mode", "model_type", "lead_mode", "n_intervals", "max_time", "prediction_horizon",
         "target_len", "waveform_type", "resample_hz", "apply_filters", "bandpass_low_hz",
         "bandpass_high_hz", "notch_hz", "notch_q", "batch", "epochs",
         "lr", "num_workers", "dropout", "weight_decay", "sched_tmax",
