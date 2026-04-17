@@ -79,6 +79,12 @@ CSV_DIR=""
 # classification = 二分类，建议作为对照实验
 TASK_MODE="prediction"
 
+# 模型架构：
+# resnet        = ResNet1d（论文同款，适合10000+样本）
+# tcn_light     = TCN轻量版（适合1200样本，参数量~25,000）
+# cnn_transformer = CNN+Transformer（实验性，参数量过大）
+MODEL_TYPE="resnet"
+
 # 导联类型：
 # 8lead  = I, II, V1-V6
 # 12lead = I, II, III, aVR, aVL, aVF, V1-V6
@@ -178,6 +184,12 @@ if [[ "$TASK_MODE" != "prediction" && "$TASK_MODE" != "classification" ]]; then
   exit 1
 fi
 
+MODEL_TYPE="${MODEL_TYPE:-resnet}"
+if [[ "$MODEL_TYPE" != "resnet" && "$MODEL_TYPE" != "tcn_light" && "$MODEL_TYPE" != "cnn_transformer" ]]; then
+  echo "[error] MODEL_TYPE 只能是 resnet、tcn_light 或 cnn_transformer"
+  exit 1
+fi
+
 if [[ "$LEAD_MODE" != "8lead" && "$LEAD_MODE" != "12lead" ]]; then
   echo "[error] LEAD_MODE 只能是 8lead 或 12lead"
   exit 1
@@ -211,6 +223,7 @@ CMD=(
   "$ROOT/scripts/run_survival_training.py"
   "--manifest" "$MANIFEST_PATH"
   "--task-mode" "$TASK_MODE"
+  "--model-type" "$MODEL_TYPE"
   "--lead-mode" "$LEAD_MODE"
   "--n-intervals" "$N_INTERVALS"
   "--max-time" "$MAX_TIME"
@@ -277,6 +290,7 @@ fi
 
 echo "[info] 即将启动训练，关键参数如下："
 echo "  task_mode=$TASK_MODE"
+echo "  model_type=$MODEL_TYPE"
 echo "  lead_mode=$LEAD_MODE"
 echo "  manifest=$MANIFEST_PATH"
 echo "  xml_dir=$XML_DIR_PATH"

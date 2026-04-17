@@ -223,6 +223,12 @@ $CsvDir = ""
 # classification = 二分类，建议作为对照实验
 $TaskMode = "prediction"
 
+# 模型架构：
+# resnet        = ResNet1d（论文同款，适合10000+样本）
+# tcn_light     = TCN轻量版（适合1200样本，参数量~25,000）
+# cnn_transformer = CNN+Transformer（实验性，参数量过大）
+$ModelType = "resnet"
+
 # 导联类型：
 # 8lead  = I, II, V1-V6
 # 12lead = I, II, III, aVR, aVL, aVF, V1-V6
@@ -302,6 +308,7 @@ if ($EnvConfig.ContainsKey('MANIFEST')) { $Manifest = [string]$EnvConfig['MANIFE
 if ($EnvConfig.ContainsKey('XML_DIR')) { $XmlDir = [string]$EnvConfig['XML_DIR'] }
 if ($EnvConfig.ContainsKey('CSV_DIR')) { $CsvDir = [string]$EnvConfig['CSV_DIR'] }
 if ($EnvConfig.ContainsKey('TASK_MODE')) { $TaskMode = [string]$EnvConfig['TASK_MODE'] }
+if ($EnvConfig.ContainsKey('MODEL_TYPE')) { $ModelType = [string]$EnvConfig['MODEL_TYPE'] }
 if ($EnvConfig.ContainsKey('LEAD_MODE')) { $LeadMode = [string]$EnvConfig['LEAD_MODE'] }
 if ($EnvConfig.ContainsKey('N_INTERVALS')) { $NIntervals = [string]$EnvConfig['N_INTERVALS'] }
 if ($EnvConfig.ContainsKey('MAX_TIME')) { $MaxTime = [string]$EnvConfig['MAX_TIME'] }
@@ -391,6 +398,10 @@ if ($TaskMode -notin @("prediction", "classification")) {
     throw "[error] TaskMode 只能是 prediction 或 classification"
 }
 
+if ($ModelType -notin @("resnet", "tcn_light", "cnn_transformer")) {
+    throw "[error] ModelType 只能是 resnet、tcn_light 或 cnn_transformer"
+}
+
 if ($LeadMode -eq "auto") {
     throw "[error] LeadMode=auto 需要先生成 training_inputs.json，或手动改成 8lead / 12lead"
 }
@@ -423,6 +434,7 @@ $CommandArgs = @()
 $CommandArgs += Join-Path $Root 'scripts/run_survival_training.py'
 $CommandArgs += @('--manifest', $ManifestResolved)
 $CommandArgs += @('--task-mode', $TaskMode)
+$CommandArgs += @('--model-type', $ModelType)
 $CommandArgs += @('--lead-mode', $LeadMode)
 $CommandArgs += @('--n-intervals', $NIntervals.ToString())
 $CommandArgs += @('--max-time', $MaxTime.ToString())
@@ -489,6 +501,7 @@ if ($UseBestParams) {
 
 Write-Host '[info] 即将启动训练，关键参数如下：'
 Write-Host "  task_mode=$TaskMode"
+Write-Host "  model_type=$ModelType"
 Write-Host "  lead_mode=$LeadMode"
 Write-Host "  manifest=$ManifestResolved"
 Write-Host "  xml_dir=$XmlDirResolved"
