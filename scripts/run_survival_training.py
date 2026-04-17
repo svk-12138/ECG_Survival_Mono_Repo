@@ -80,8 +80,9 @@ MODEL_PRESETS = {
 
     # 中等样本场景（1万样本）
     "resnet_small": {
-        "description": "ResNet1d小版（参数量~12万，适合1万样本）",
+        "description": "ResNet1d小版（参数量~13.5万，适合1万样本）",
         "model_type": "resnet",
+        "resnet_blocks_dim": [[12, 1024], [24, 256], [32, 64], [48, 16]],
         "batch": 32,
         "epochs": 80,
         "lr": 0.0005,
@@ -92,8 +93,9 @@ MODEL_PRESETS = {
 
     # 大样本场景（10万+样本）
     "resnet_standard": {
-        "description": "ResNet1d标准版（参数量~294万，适合10万+样本，论文同款）",
+        "description": "ResNet1d标准版（参数量~386万，适合10万+样本，论文同款）",
         "model_type": "resnet",
+        "resnet_blocks_dim": None,
         "batch": 64,
         "epochs": 100,
         "lr": 0.0003,
@@ -254,10 +256,16 @@ def _coerce_value(current: Any, new_value: Any):
 
 def apply_overrides(cfg: TrainConfig, overrides: Dict[str, Any]) -> TrainConfig:
     for key, value in overrides.items():
-        if value is None or not hasattr(cfg, key):
+        if not hasattr(cfg, key):
+            continue
+        # resnet_blocks_dim 允许显式设为 None（表示使用默认大版）
+        if key == "resnet_blocks_dim":
+            setattr(cfg, key, value)
+            continue
+        if value is None:
             continue
         current = getattr(cfg, key)
-        if key in {"xml_dir", "csv_dir", "manifest", "log_dir"} and not isinstance(value, Path):
+        if key in {"xml_dir", "csv_dir", "manifest", "log_dir", "split_file"} and not isinstance(value, Path):
             value = Path(value)
         setattr(cfg, key, _coerce_value(current, value))
     return cfg

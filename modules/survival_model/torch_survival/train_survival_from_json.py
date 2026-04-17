@@ -100,6 +100,7 @@ DEFAULT_SPLIT_FILE: Path | None = None  # 固定划分文件路径；存在则�
 DEFAULT_CSV_DIR = None
 DEFAULT_TASK_MODE = "prediction"
 DEFAULT_MODEL_TYPE = "resnet"  # 可选: resnet, cnn_transformer, tcn_light
+DEFAULT_RESNET_BLOCKS_DIM = None  # None = 使用 build_survival_resnet 内置默认值
 DEFAULT_LEAD_MODE = "8lead"
 DEFAULT_PREDICTION_HORIZON = 365.25 * 5.0  # 论文预测评估使用 5 年风险
 DEFAULT_WAVEFORM_TYPE = "Rhythm"
@@ -121,6 +122,7 @@ class TrainConfig:
     manifest: Path = DEFAULT_MANIFEST
     task_mode: Literal["prediction", "classification"] = DEFAULT_TASK_MODE
     model_type: str = DEFAULT_MODEL_TYPE  # resnet | cnn_transformer | tcn_light
+    resnet_blocks_dim: list | None = DEFAULT_RESNET_BLOCKS_DIM  # None = 使用默认大版
     lead_mode: str = DEFAULT_LEAD_MODE
     n_intervals: int = DEFAULT_NUM_INTERVALS
     max_time: float = DEFAULT_MAX_TIME
@@ -1300,10 +1302,14 @@ def _train_model(
 
     # 根据model_type选择模型架构
     if cfg.model_type == "resnet":
+        resnet_kwargs = {}
+        if cfg.resnet_blocks_dim is not None:
+            resnet_kwargs["blocks_dim"] = [tuple(b) for b in cfg.resnet_blocks_dim]
         model = build_survival_resnet(
             cfg.n_intervals,
             input_dim=(len(leads), cfg.target_len),
             dropout_rate=cfg.dropout,
+            **resnet_kwargs,
         )
     elif cfg.model_type == "cnn_transformer":
         model = build_survival_cnn_transformer(
