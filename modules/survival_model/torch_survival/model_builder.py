@@ -240,4 +240,152 @@ def build_survival_tcn_light(
     return model.float()
 
 
-__all__ = ["build_survival_cnn_transformer", "build_survival_resnet", "build_survival_tcn_light"]
+__all__ = ["build_survival_cnn_transformer", "build_survival_resnet", "build_survival_tcn_light",
+           "build_survival_cnn_gru", "build_survival_cnn_transformer_small"]
+
+
+class CNNGRUSurvival(nn.Module):
+    """CNN 提特征 + 双向 GRU 时序建模，输出离散时间存活概率。
+
+    参数量约 8 万，适合 1 万样本场景。
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        n_intervals: int,
+        conv_channels: Sequence[int] = (32, 64, 64),
+        conv_kernels: Sequence[int] = (7, 5, 3),
+        gru_hidden: int = 64,
+        gru_layers: int = 1,
+        dropout: float = 0.3,
+    ):
+        super().__init__()
+        conv_layers = []
+        cur = in_channels
+        for ch, k in zip(conv_channels, conv_kernels):
+            conv_layers.append(nn.Sequential(
+                nn.Conv1d(cur, ch, kernel_size=k, padding=k // 2, bias=False),
+                nn.BatchNorm1d(ch),
+                nn.ReLU(inplace=True),
+                nn.MaxPool1d(2),
+            ))
+            cur = ch
+        self.conv = nn.Sequential(*conv_layers)
+        self.gru = nn.GRU(
+            input_size=cur,
+            hidden_size=gru_hidden,
+            num_layers=gru_layers,
+            batch_first=True,
+            bidirectional=True,
+            dropout=dropout if gru_layers > 1 else 0.0,
+        )
+        self.dropout = nn.Dropout(dropout)
+        self.head = nn.Linear(gru_hidden * 2, n_intervals)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.conv(x)               # (B, C, L')
+        x = x.transpose(1, 2)         # (B, L', C)
+        _, h = self.gru(x)             # h: (2*layers, B, hidden)
+        h = torch.cat([h[-2], h[-1]], dim=-1)  # (B, hidden*2)
+        return self.head(self.dropout(h))
+
+
+def build_survival_cnn_gru(
+    n_intervals: int,
+    input_dim: Tuple[int, int] = (8, 4096),
+    conv_channels: Sequence[int] = (32, 64, 64),
+    conv_kernels: Sequence[int] = (7, 5, 3),
+    gru_hidden: int = 64,
+    gru_layers: int = 1,
+    dropout: float = 0.3,
+) -> nn.Module:
+    """构建 CNN+GRU 生存模型，参数量约 8 万，适合 1 万样本。"""
+    return CNNGRUSurvival(
+        in_channels=input_dim[0],
+        n_intervals=n_intervals,
+        conv_channels=conv_channels,
+        conv_kernels=conv_kernels,
+        gru_hidden=gru_hidden,
+        gru_layers=gru_layers,
+        dropout=dropout,
+    ).float()
+
+
+class CNNTransformerSmallSurvival(nn.Module):
+    """轻量 CNN+Transformer，参数量约 10 万，适合 1 万样本。
+
+    相比 ConvTransformerSurvival（69万参数）大幅缩减：
+    - conv 通道数减半（32/64）
+    - transformer dim=64，1层，4头
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        n_intervals: int,
+        conv_channels: Sequence[int] = (32, 64),
+        transformer_dim: int = 64,
+        transformer_heads: int = 4,
+        transformer_layers: int = 1,
+        seq_len: int = 64,
+        dropout: float = 0.3,
+    ):
+        super().__init__()
+        conv_layers = []
+        cur = in_channels
+        for ch in conv_channels:
+            conv_layers.append(nn.Sequential(
+                nn.Conv1d(cur, ch, kernel_size=7, stride=2, padding=3, bias=False),
+                nn.BatchNorm1d(ch),
+                nn.ReLU(inplace=True),
+            ))
+            cur = ch
+        self.conv = nn.Sequential(*conv_layers)
+        self.pool = nn.AdaptiveAvgPool1d(seq_len)
+        self.proj = nn.Conv1d(cur, transformer_dim, kernel_size=1, bias=False)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=transformer_dim,
+            nhead=transformer_heads,
+            dim_feedforward=transformer_dim * 2,
+            dropout=dropout,
+            batch_first=True,
+            activation="relu",
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=transformer_layers)
+        self.head = nn.Sequential(
+            nn.Linear(transformer_dim, transformer_dim // 2),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(transformer_dim // 2, n_intervals),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.conv(x)
+        x = self.pool(x)
+        x = self.proj(x).transpose(1, 2)   # (B, T, d)
+        x = self.transformer(x).mean(dim=1) # (B, d)
+        return self.head(x)
+
+
+def build_survival_cnn_transformer_small(
+    n_intervals: int,
+    input_dim: Tuple[int, int] = (8, 4096),
+    conv_channels: Sequence[int] = (32, 64),
+    transformer_dim: int = 64,
+    transformer_heads: int = 4,
+    transformer_layers: int = 1,
+    seq_len: int = 64,
+    dropout: float = 0.3,
+) -> nn.Module:
+    """构建轻量 CNN+Transformer 生存模型，参数量约 10 万，适合 1 万样本。"""
+    return CNNTransformerSmallSurvival(
+        in_channels=input_dim[0],
+        n_intervals=n_intervals,
+        conv_channels=conv_channels,
+        transformer_dim=transformer_dim,
+        transformer_heads=transformer_heads,
+        transformer_layers=transformer_layers,
+        seq_len=seq_len,
+        dropout=dropout,
+    ).float()

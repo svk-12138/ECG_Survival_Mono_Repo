@@ -106,8 +106,51 @@ MODEL_PRESETS = {
 
     # 实验性模型
     "cnn_transformer": {
-        "description": "CNN+Transformer（参数量~69万，实验性，需要足够样本）",
+        "description": "CNN+Transformer大版（参数量~69万，实验性，需要足够样本）",
         "model_type": "cnn_transformer",
+        "batch": 32,
+        "epochs": 80,
+        "lr": 0.0005,
+        "dropout": 0.3,
+        "weight_decay": 0.0001,
+        "n_intervals": 20,
+    },
+
+    # 新增4个模型
+    "resnet_micro": {
+        "description": "ResNet1d极小版（参数量~4万，适合1200-5000样本）",
+        "model_type": "resnet",
+        "resnet_blocks_dim": [[8, 1024], [12, 256], [16, 64], [24, 16]],
+        "batch": 16,
+        "epochs": 100,
+        "lr": 0.001,
+        "dropout": 0.4,
+        "weight_decay": 0.0001,
+        "n_intervals": 15,
+    },
+    "tcn_standard": {
+        "description": "TCN标准版（参数量~28万，适合1万-5万样本）",
+        "model_type": "tcn_light",
+        "batch": 32,
+        "epochs": 80,
+        "lr": 0.0005,
+        "dropout": 0.3,
+        "weight_decay": 0.0001,
+        "n_intervals": 20,
+    },
+    "cnn_gru": {
+        "description": "CNN+GRU（参数量~8万，适合1万样本，时序建模能力强）",
+        "model_type": "cnn_gru",
+        "batch": 32,
+        "epochs": 80,
+        "lr": 0.0005,
+        "dropout": 0.3,
+        "weight_decay": 0.0001,
+        "n_intervals": 20,
+    },
+    "cnn_transformer_small": {
+        "description": "CNN+Transformer小版（参数量~10万，适合1万样本）",
+        "model_type": "cnn_transformer_small",
         "batch": 32,
         "epochs": 80,
         "lr": 0.0005,

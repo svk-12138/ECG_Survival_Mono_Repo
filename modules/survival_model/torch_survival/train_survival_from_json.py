@@ -61,6 +61,8 @@ from torch_survival.model_builder import (
     build_survival_resnet,
     build_survival_cnn_transformer,
     build_survival_tcn_light,
+    build_survival_cnn_gru,
+    build_survival_cnn_transformer_small,
 )
 
 # ====================== 超参数区域 ======================
@@ -1323,8 +1325,20 @@ def _train_model(
             input_dim=(len(leads), cfg.target_len),
             dropout=cfg.dropout,
         )
+    elif cfg.model_type == "cnn_gru":
+        model = build_survival_cnn_gru(
+            n_intervals=cfg.n_intervals,
+            input_dim=(len(leads), cfg.target_len),
+            dropout=cfg.dropout,
+        )
+    elif cfg.model_type == "cnn_transformer_small":
+        model = build_survival_cnn_transformer_small(
+            n_intervals=cfg.n_intervals,
+            input_dim=(len(leads), cfg.target_len),
+            dropout=cfg.dropout,
+        )
     else:
-        raise ValueError(f"Unknown model_type: {cfg.model_type}. Must be one of: resnet, cnn_transformer, tcn_light")
+        raise ValueError(f"Unknown model_type: {cfg.model_type}. Must be one of: resnet, cnn_transformer, tcn_light, cnn_gru, cnn_transformer_small")
 
     model = model.to(device=device, dtype=torch.float32)
     if cfg.use_data_parallel and device.type == "cuda":

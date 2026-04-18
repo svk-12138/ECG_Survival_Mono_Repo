@@ -194,7 +194,7 @@ fi
 
 MODEL_TYPE="${MODEL_TYPE:-resnet}"
 # 若设置了 MODEL_NAME 预设，校验其合法性；否则校验 MODEL_TYPE
-VALID_MODEL_NAMES="tcn_light resnet_small resnet_standard cnn_transformer"
+VALID_MODEL_NAMES="tcn_light resnet_micro resnet_small resnet_standard cnn_transformer cnn_gru cnn_transformer_small tcn_standard"
 if [[ -n "${MODEL_NAME:-}" ]]; then
   valid=false
   for name in $VALID_MODEL_NAMES; do
@@ -205,8 +205,8 @@ if [[ -n "${MODEL_NAME:-}" ]]; then
     exit 1
   fi
 else
-  if [[ "$MODEL_TYPE" != "resnet" && "$MODEL_TYPE" != "tcn_light" && "$MODEL_TYPE" != "cnn_transformer" ]]; then
-    echo "[error] MODEL_TYPE 只能是 resnet、tcn_light 或 cnn_transformer"
+  if [[ "$MODEL_TYPE" != "resnet" && "$MODEL_TYPE" != "tcn_light" && "$MODEL_TYPE" != "cnn_transformer" && "$MODEL_TYPE" != "cnn_gru" && "$MODEL_TYPE" != "cnn_transformer_small" ]]; then
+    echo "[error] MODEL_TYPE 只能是 resnet、tcn_light、cnn_transformer、cnn_gru 或 cnn_transformer_small"
     exit 1
   fi
 fi

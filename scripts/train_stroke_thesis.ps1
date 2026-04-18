@@ -389,8 +389,8 @@ if ($TaskMode -notin @("prediction", "classification")) {
     throw "[error] TaskMode 只能是 prediction 或 classification"
 }
 
-if ($ModelType -notin @("resnet", "tcn_light", "cnn_transformer")) {
-    throw "[error] ModelType 只能是 resnet、tcn_light 或 cnn_transformer"
+if ($ModelType -notin @("resnet", "tcn_light", "cnn_transformer", "cnn_gru", "cnn_transformer_small")) {
+    throw "[error] ModelType 只能是 resnet、tcn_light、cnn_transformer、cnn_gru 或 cnn_transformer_small"
 }
 
 if ($LeadMode -eq "auto") {
